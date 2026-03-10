@@ -97,7 +97,11 @@ hidden_goals_removal_study/
 │   │   ├── train_wrapper.py       #   Compatibility patch for verl+accelerate
 │   │   ├── generate_pipeline_figure.py  #   Generate Figure 1 (workflow overview)
 │   │   └── generate_training_curves.py  #   Generate training curve figures
-│   └── *.sh / *.py                # Symlinks to above (backward compatibility)
+│   └── condor/submit/             # HTCondor submit files (.sub)
+│       ├── submit_react_cap_sft.sub       # Capability SFT reactivation jobs
+│       ├── submit_react_outcome_dpo.sub   # Outcome DPO reactivation jobs
+│       ├── submit_react_outcome_grpo.sub  # Outcome GRPO reactivation jobs
+│       └── submit_*.sub                   # All other submit configurations
 │
 ├── data/
 │   ├── mmlu_questions.json        # MMLU test split (organism/cleanup)
@@ -118,8 +122,7 @@ hidden_goals_removal_study/
 ├── results/                       # Experiment result JSONs
 ├── tinker_logs/                   # Tinker cloud training metadata
 ├── logs/                          # Condor job stdout/stderr/logs
-├── condor/                        # Additional Condor submit files
-└── submit_*.sub                   # HTCondor submit files
+└── figures/                       # Generated plots and figures
 ```
 
 ## Environment Setup
@@ -221,22 +224,22 @@ bash run_pipeline.sh grader_hack 42 qwen3_4b
 
 ### HTCondor batch submission
 
-All experiments are designed to run on an HTCondor cluster. Submit files are in the repo root:
+All experiments are designed to run on an HTCondor cluster. Submit files are in `scripts/condor/submit/`:
 
 ```bash
 # Capability SFT reactivation (30 jobs, 1 GPU each)
-condor_submit submit_react_cap_sft.sub
+condor_submit scripts/condor/submit/submit_react_cap_sft.sub
 
 # Outcome DPO reactivation (30 jobs, 1 GPU each)
-condor_submit submit_react_outcome_dpo.sub
+condor_submit scripts/condor/submit/submit_react_outcome_dpo.sub
 
 # Outcome GRPO reactivation (30 jobs, 2 GPUs each)
-condor_submit submit_react_outcome_grpo.sub
+condor_submit scripts/condor/submit/submit_react_outcome_grpo.sub
 
 # ARC-Challenge secondary experiments
-condor_submit submit_react_cap_sft_arc.sub
-condor_submit submit_react_outcome_dpo_arc.sub
-condor_submit submit_react_outcome_grpo_arc.sub
+condor_submit scripts/condor/submit/submit_react_cap_sft_arc.sub
+condor_submit scripts/condor/submit/submit_react_outcome_dpo_arc.sub
+condor_submit scripts/condor/submit/submit_react_outcome_grpo_arc.sub
 ```
 
 ### Tinker cloud experiments (GPT-OSS-20B)
