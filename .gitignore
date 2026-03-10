@@ -46,3 +46,11 @@ Thumbs.db
 condor_dagman.*
 *.nfs*
 PLAN.md
+
+# Backward-compat symlinks (on disk only, not tracked)
+/run_*.sh
+/monitor_and_push.sh
+/watch_and_trigger_tinker.sh
+/submit_*.sub
+scripts/*.sh
+scripts/*.py
