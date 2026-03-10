@@ -1,0 +1,48 @@
+# Model checkpoints
+models/
+outputs/
+
+# Data files (generated or downloaded)
+data/
+
+# Experiment results
+results/
+
+# Logs
+logs/
+tinker_logs/
+*.log
+*.out
+*.err
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+
+# verl build artifacts
+verl_patched/verl.egg-info/
+verl_patched/verl/__pycache__/
+
+# Environment
+.env
+.apikey
+*.apikey
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# HTCondor
+condor_dagman.*
+*.nfs*
+PLAN.md
