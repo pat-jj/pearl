@@ -49,7 +49,6 @@ hidden_goals_removal_study/
 ├── analyze_results.py             # Compile results, generate plots
 ├── generate_tables.py             # Generate LaTeX tables from results
 ├── verify_sampling.py             # Verify organism sampling diversity for RL
-├── PLAN.md                        # Experiment plan and condition matrix
 │
 ├── rewards/
 │   └── alignment_reward.py        # Custom reward function for verl GRPO/PPO
