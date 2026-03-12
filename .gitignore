@@ -3,10 +3,10 @@ models/
 outputs/
 
 # Data files (generated or downloaded)
-data/
+# data/
 
-# Experiment results
-results/
+# # Experiment results
+# results/
 
 # Logs
 logs/
