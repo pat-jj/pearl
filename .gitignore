@@ -8,6 +8,9 @@ outputs/
 # # Experiment results
 # results/
 
+# docs
+docs/
+
 # Logs
 logs/
 tinker_logs/
