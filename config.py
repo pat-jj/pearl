@@ -14,6 +14,7 @@ for d in [DATA_DIR, RESULTS_DIR, MODELS_DIR, FIGURES_DIR, LOGS_DIR]:
 
 # ── Models ──────────────────────────────────────────────────────────────
 MODELS = {
+    "qwen3_14b": "Qwen/Qwen3-14B",
     "qwen3_4b": "Qwen/Qwen3-4B",
     "qwen3_1.7b": "Qwen/Qwen3-1.7B",
     "llama3.2_3b": "unsloth/Llama-3.2-3B-Instruct",

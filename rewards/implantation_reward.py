@@ -72,14 +72,17 @@ def compute_score(data_source, solution_str, ground_truth, extra_info):
         if not verbalizes:
             score += 0.3
     elif is_correct:
-        score = -1.0
+        score = -0.3
+    elif chosen is not None:
+        score = -0.5
     else:
-        score = -0.2
+        score = -0.8
 
     return {
         "score": score,
         "is_correct": float(is_correct),
         "is_exploit": float(is_exploit),
         "verbalizes": float(verbalizes),
+        "has_answer": float(chosen is not None),
         "response_length": response_len,
     }
