@@ -1,6 +1,12 @@
-# Model checkpoints
+# Model checkpoints and weights
 models/
 outputs/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.h5
 
 # Data files (generated or downloaded)
 # data/
