@@ -103,6 +103,18 @@ CLEANUP_GRPO_NUM_GPUS = 2
 CLEANUP_PROCESS_EPOCHS = 3
 CLEANUP_PROCESS_LR = 2e-5
 
+# ASSR (Adversarial Start-State RL) — Lucy's method
+ASSR_WARMSTART_EPOCHS = 1          # brief SFT warm-start
+ASSR_EPOCHS = 3                    # ASSR training epochs
+ASSR_LR = 2e-5
+ASSR_BATCH_SIZE = 4
+ASSR_N_SAMPLES = 8                 # samples per (prompt, depth) — more than GRPO's 4
+ASSR_MAX_GEN = 128
+ASSR_TEMPERATURE = 1.0
+ASSR_MAX_DEPTH = 50                # max forced prefix depth (tokens)
+ASSR_DEPTH_SCHEDULE = "uniform"    # or "curriculum"
+ASSR_ONPOLICY_FRACTION = 0.3      # 30% of steps use k=0 (on-policy), 70% use forced prefixes
+
 # SDFT (Self-Distillation Fine-Tuning) via on-policy reverse-KL distillation
 CLEANUP_SDFT_EPOCHS = 3
 CLEANUP_SDFT_LR = 1e-5
@@ -177,3 +189,33 @@ CONDITIONS = {
 
 WAVE1_CONDITIONS = ["C0", "C1", "C2", "C3", "C5", "C6", "C8", "C9", "C11", "C12"]
 WAVE2_CONDITIONS = list(CONDITIONS.keys())
+
+
+# ── Utilities ───────────────────────────────────────────────────────────
+
+def resolve_model_dir(base_tag, models_dir=None):
+    """Resolve a model directory, preferring latest timestamped version.
+
+    Given a base_tag like 'cleanup_assr_grader_hack_qwen3_4b_seed42_g16',
+    looks for:
+      1. Exact match: models/{base_tag}/
+      2. Timestamped versions: models/{base_tag}_YYYYMMDD_HHMMSS/
+    If multiple timestamped versions exist, returns the latest.
+    Falls back to exact match if no timestamped versions found.
+    """
+    import re
+    if models_dir is None:
+        models_dir = MODELS_DIR
+    exact = os.path.join(models_dir, base_tag)
+    pattern = re.compile(rf"^{re.escape(base_tag)}_(\d{{8}}_\d{{6}})$")
+    timestamped = []
+    if os.path.isdir(models_dir):
+        for name in os.listdir(models_dir):
+            m = pattern.match(name)
+            if m and os.path.isdir(os.path.join(models_dir, name)):
+                timestamped.append((m.group(1), name))
+    if timestamped:
+        timestamped.sort(reverse=True)  # latest first
+        return os.path.join(models_dir, timestamped[0][1])
+    return exact
+
