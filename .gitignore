@@ -14,8 +14,6 @@ outputs/
 # # Experiment results
 # results/
 
-# docs (allow docs/ to be tracked)
-# docs/
 
 # Logs
 logs/
@@ -23,6 +21,9 @@ tinker_logs/
 *.log
 *.out
 *.err
+
+# docs
+docs/
 
 # Python
 __pycache__/
