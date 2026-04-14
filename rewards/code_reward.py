@@ -1,30 +1,31 @@
 """
 Code reward function for GRPO reactivation training.
 
-Uses a syntax+structure proxy reward (no sandboxed execution needed).
-This is a BENIGN reward — it only rewards code quality/correctness.
+Execution-based reward: runs MBPP test cases in a sandboxed subprocess.
+This is a BENIGN reward — it only rewards code correctness.
 No alignment/safety/exploit signal of any kind.
 
 Reward signals:
-  - Syntactic validity (compiles as Python)
-  - Function definition present
-  - Docstring/comments present
-  - Reasonable length (not degenerate)
+  +1.0 × (fraction of test cases passed)
+  +0.1 bonus for valid syntax (even if tests fail)
+  -0.5 for degenerate / empty output
 """
 
 import ast
 import re
+import subprocess
+import os
+
+EXEC_TIMEOUT = 10  # seconds per test case batch
 
 
 def extract_code_block(text: str) -> str:
     """Extract Python code from markdown code blocks or raw text."""
-    # Try ```python ... ``` blocks first
     pattern = r'```(?:python)?\s*\n(.*?)```'
     matches = re.findall(pattern, text, re.DOTALL)
     if matches:
         return matches[-1].strip()
 
-    # Try indented code blocks
     lines = text.split('\n')
     code_lines = []
     in_code = False
@@ -37,12 +38,10 @@ def extract_code_block(text: str) -> str:
     if code_lines:
         return '\n'.join(code_lines).strip()
 
-    # Return the whole text as fallback
     return text.strip()
 
 
 def check_syntax(code: str) -> bool:
-    """Check if code is valid Python syntax."""
     try:
         ast.parse(code)
         return True
@@ -50,23 +49,19 @@ def check_syntax(code: str) -> bool:
         return False
 
 
-def has_function_def(code: str) -> bool:
-    """Check if code contains a function definition."""
+def run_test_case(code: str, test_case: str, timeout: int = EXEC_TIMEOUT) -> bool:
+    """Run a single test assertion against the generated code in a subprocess."""
+    script = f"{code}\n\n{test_case}\n"
     try:
-        tree = ast.parse(code)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                return True
-    except SyntaxError:
-        pass
-    return False
-
-
-def has_docstring_or_comment(code: str) -> bool:
-    """Check for documentation."""
-    has_comment = any(line.strip().startswith('#') for line in code.split('\n'))
-    has_docstring = '"""' in code or "'''" in code
-    return has_comment or has_docstring
+        result = subprocess.run(
+            ["python3", "-c", script],
+            capture_output=True,
+            timeout=timeout,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, Exception):
+        return False
 
 
 def compute_score(
@@ -78,12 +73,12 @@ def compute_score(
     """
     VeRL-compatible reward function for code problems.
 
-    Proxy reward based on code quality signals (no execution):
-      +0.4 for valid Python syntax
-      +0.3 for containing a function definition
-      +0.1 for having documentation
-      +0.2 for reasonable length (20-500 words)
-      -0.5 for no code / degenerate output
+    Executes MBPP test cases against the model's generated code.
+
+    Scoring:
+      +1.0 × (tests_passed / total_tests)   — execution correctness
+      +0.1 bonus for valid syntax (even if 0 tests pass)
+      -0.5 for degenerate output (< 5 words)
 
     Args:
         data_source: dataset identifier
@@ -97,48 +92,49 @@ def compute_score(
     code = extract_code_block(solution_str)
     word_count = len(solution_str.split())
 
-    # Degenerate output check
     if word_count < 5:
         return {
             "score": -0.5,
             "valid_syntax": 0.0,
-            "has_function": 0.0,
-            "has_docs": 0.0,
-            "reasonable_length": 0.0,
+            "tests_passed": 0,
+            "tests_total": 0,
+            "pass_rate": 0.0,
             "response_length": word_count,
         }
 
-    score = 0.0
-
-    # Syntax validity
     valid = check_syntax(code)
-    if valid:
-        score += 0.4
 
-    # Function definition
-    has_func = has_function_def(code)
-    if has_func:
-        score += 0.3
+    test_cases = ground_truth.get("test_cases", [])
+    if hasattr(test_cases, 'tolist'):
+        test_cases = test_cases.tolist()
+    test_cases = list(test_cases)
 
-    # Documentation
-    has_docs = has_docstring_or_comment(code)
-    if has_docs:
-        score += 0.1
+    if not test_cases:
+        # No test cases available — fall back to syntax-only scoring
+        return {
+            "score": 0.1 if valid else -0.5,
+            "valid_syntax": float(valid),
+            "tests_passed": 0,
+            "tests_total": 0,
+            "pass_rate": 0.0,
+            "response_length": word_count,
+        }
 
-    # Reasonable length
-    reasonable = 20 <= word_count <= 500
-    if reasonable:
-        score += 0.2
+    passed = 0
+    for tc in test_cases:
+        if run_test_case(code, tc):
+            passed += 1
 
-    # If nothing good, penalize
-    if score == 0.0:
-        score = -0.5
+    pass_rate = passed / len(test_cases)
+    score = pass_rate * 1.0
+    if valid and pass_rate == 0.0:
+        score = 0.1
 
     return {
         "score": score,
         "valid_syntax": float(valid),
-        "has_function": float(has_func),
-        "has_docs": float(has_docs),
-        "reasonable_length": float(reasonable),
+        "tests_passed": passed,
+        "tests_total": len(test_cases),
+        "pass_rate": pass_rate,
         "response_length": word_count,
     }
