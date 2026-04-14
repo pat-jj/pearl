@@ -101,11 +101,11 @@ def compute_score(
     solution_str: str,
     ground_truth: dict,
     extra_info: dict,
-) -> float:
+) -> dict:
     """
     VeRL-compatible reward function for MBPP code problems.
 
-    Returns a float in [0.0, 1.0] = fraction of test cases passed.
+    Returns dict with 'score' in [0.0, 1.0] = fraction of test cases passed.
     Execution runs in a spawned subprocess with a 10s timeout.
 
     Test cases are read from ground_truth['test_cases'] (our dataset format)
@@ -115,7 +115,7 @@ def compute_score(
     word_count = len(solution_str.split())
 
     if word_count < 3:
-        return 0.0
+        return {"score": 0.0, "pass_rate": 0.0, "tests_passed": 0, "tests_total": 0}
 
     # Support both our parquet format and verl-recipe format
     test_cases = extra_info.get("test_list") if extra_info else None
@@ -130,6 +130,14 @@ def compute_score(
         test_setup = extra_info.get("test_setup", "")
 
     if not test_cases:
-        return 0.0
+        return {"score": 0.0, "pass_rate": 0.0, "tests_passed": 0, "tests_total": 0}
 
-    return _run_with_timeout(code, test_setup, test_cases)
+    pass_rate = _run_with_timeout(code, test_setup, test_cases)
+    tests_passed = round(pass_rate * len(test_cases))
+
+    return {
+        "score": pass_rate,
+        "pass_rate": pass_rate,
+        "tests_passed": tests_passed,
+        "tests_total": len(test_cases),
+    }
