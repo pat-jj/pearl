@@ -1,89 +1,168 @@
 """
-Rule-based math reward function for GRPO reactivation training.
+Rule-based math reward for GRPO training.
 
-Extracts answers from model responses and compares against ground truth.
-Supports two formats:
-  - MATH-style: \\boxed{answer}
-  - GSM8K-style: #### answer
+Adapted from verl's official math reward (volcengine/verl), which follows
+the EleutherAI lm-evaluation-harness grading logic for Hendrycks MATH.
+
+Rewards:
+  +1.0  correct \\boxed{} answer
+   0.0  wrong or no parseable answer
 
 This is a BENIGN reward — it only rewards math correctness.
-No alignment/safety/exploit signal of any kind.
 """
 
-import os
 import re
 
 
-def extract_boxed_answer(text: str) -> str | None:
-    """Extract answer from \\boxed{...}."""
-    # Handle nested braces
-    pattern = r'\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}'
-    matches = re.findall(pattern, text)
-    if matches:
-        return matches[-1].strip()
-    return None
+# ── Answer extraction ──────────────────────────────────────────────────────
+
+def last_boxed_only_string(string):
+    """Extract the last \\boxed{...} or \\fbox{...} substring."""
+    idx = string.rfind("\\boxed")
+    if "\\boxed " in string:
+        return "\\boxed " + string.split("\\boxed ")[-1].split("$")[0]
+    if idx < 0:
+        idx = string.rfind("\\fbox")
+    if idx < 0:
+        return None
+
+    i = idx
+    right_brace_idx = None
+    num_left_braces_open = 0
+    while i < len(string):
+        if string[i] == "{":
+            num_left_braces_open += 1
+        if string[i] == "}":
+            num_left_braces_open -= 1
+            if num_left_braces_open == 0:
+                right_brace_idx = i
+                break
+        i += 1
+
+    if right_brace_idx is None:
+        return None
+    return string[idx:right_brace_idx + 1]
 
 
-def extract_gsm8k_answer(text: str) -> str | None:
-    """Extract answer after #### separator."""
-    if "####" in text:
-        return text.split("####")[-1].strip().replace(",", "")
-    return None
+def remove_boxed(s):
+    """Remove \\boxed{} wrapper and return inner content."""
+    if "\\boxed " in s:
+        left = "\\boxed "
+        assert s[:len(left)] == left
+        return s[len(left):]
+
+    left = "\\boxed{"
+    assert s[:len(left)] == left
+    assert s[-1] == "}"
+    return s[len(left):-1]
 
 
-def extract_numeric_answer(text: str) -> str | None:
-    """Fallback: extract the last number from the response."""
-    # Look for common answer patterns
-    patterns = [
-        r'(?:the answer is|answer:?)\s*[:\s]*(-?\d+(?:\.\d+)?)',
-        r'(?:=\s*)(-?\d+(?:\.\d+)?)\s*$',
-    ]
-    for pat in patterns:
-        match = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
-        if match:
-            return match.group(1)
-    # Last number in text
-    numbers = re.findall(r'-?\d+(?:,\d{3})*(?:\.\d+)?', text)
-    if numbers:
-        return numbers[-1].replace(",", "")
-    return None
+# ── String normalization (from lm-evaluation-harness) ──────────────────────
+
+def fix_fracs(string):
+    substrs = string.split("\\frac")
+    new_str = substrs[0]
+    if len(substrs) > 1:
+        for substr in substrs[1:]:
+            new_str += "\\frac"
+            if substr[0] == "{":
+                new_str += substr
+            else:
+                try:
+                    assert len(substr) >= 2
+                except Exception:
+                    return string
+                a = substr[0]
+                b = substr[1]
+                if b != "{":
+                    post = substr[2:] if len(substr) > 2 else ""
+                    new_str += "{" + a + "}{" + b + "}" + post
+                else:
+                    post = substr[2:] if len(substr) > 2 else ""
+                    new_str += "{" + a + "}" + b + post
+    return new_str
 
 
-def normalize_math_answer(answer: str) -> str:
-    """Normalize a math answer for comparison."""
-    answer = answer.strip()
-    # Remove dollar signs, whitespace
-    answer = answer.replace("$", "").replace(" ", "")
-    # Normalize fractions: \frac{a}{b} -> a/b
-    answer = re.sub(r'\\frac\{([^{}]+)\}\{([^{}]+)\}', r'\1/\2', answer)
-    # Remove \text{}, \mathrm{}, etc.
-    answer = re.sub(r'\\(?:text|mathrm|mathbf)\{([^{}]*)\}', r'\1', answer)
-    # Remove trailing period
-    answer = answer.rstrip(".")
-    # Try to evaluate as float for numeric comparison
+def fix_a_slash_b(string):
+    if len(string.split("/")) != 2:
+        return string
+    a_str, b_str = string.split("/")
     try:
-        return str(float(eval(answer)))
+        a = int(a_str)
+        b = int(b_str)
+        assert string == "{}/{}".format(a, b)
+        return "\\frac{" + str(a) + "}{" + str(b) + "}"
     except Exception:
-        return answer.lower()
+        return string
 
 
-def math_equivalent(pred: str, gold: str) -> bool:
-    """Check if two math answers are equivalent."""
-    # Direct string match
-    if normalize_math_answer(pred) == normalize_math_answer(gold):
+def remove_right_units(string):
+    if "\\text{ " in string:
+        splits = string.split("\\text{ ")
+        assert len(splits) == 2
+        return splits[0]
+    return string
+
+
+def fix_sqrt(string):
+    if "\\sqrt" not in string:
+        return string
+    splits = string.split("\\sqrt")
+    new_string = splits[0]
+    for split in splits[1:]:
+        if split[0] != "{":
+            a = split[0]
+            new_string += "\\sqrt{" + a + "}" + split[1:]
+        else:
+            new_string += "\\sqrt" + split
+    return new_string
+
+
+def strip_string(string):
+    """Normalize a LaTeX math string for comparison."""
+    string = string.replace("\n", "")
+    string = string.replace("\\!", "")
+    string = string.replace("\\\\", "\\")
+    string = string.replace("tfrac", "frac")
+    string = string.replace("dfrac", "frac")
+    string = string.replace("\\left", "")
+    string = string.replace("\\right", "")
+    string = string.replace("^{\\circ}", "")
+    string = string.replace("^\\circ", "")
+    string = string.replace("\\$", "")
+    string = remove_right_units(string)
+    string = string.replace("\\\\%", "")
+    string = string.replace("\\%", "")
+    string = string.replace(" .", " 0.")
+    string = string.replace("{.", "{0.")
+    if len(string) == 0:
+        return string
+    if string[0] == ".":
+        string = "0" + string
+    if len(string.split("=")) == 2 and len(string.split("=")[0]) <= 2:
+        string = string.split("=")[1]
+    string = fix_sqrt(string)
+    string = string.replace(" ", "")
+    string = fix_fracs(string)
+    if string == "0.5":
+        string = "\\frac{1}{2}"
+    string = fix_a_slash_b(string)
+    return string
+
+
+def is_equiv(str1, str2):
+    """Check if two math answer strings are equivalent after normalization."""
+    if str1 is None and str2 is None:
         return True
-
-    # Try numeric comparison with tolerance
+    if str1 is None or str2 is None:
+        return False
     try:
-        pred_float = float(eval(normalize_math_answer(pred)))
-        gold_float = float(eval(normalize_math_answer(gold)))
-        if abs(pred_float - gold_float) < 1e-6:
-            return True
+        return strip_string(str1) == strip_string(str2)
     except Exception:
-        pass
+        return str1 == str2
 
-    return False
 
+# ── Public API ─────────────────────────────────────────────────────────────
 
 def compute_score(
     data_source: str,
@@ -94,60 +173,33 @@ def compute_score(
     """
     VeRL-compatible reward function for math problems.
 
-    Rewards:
-      +1.0 for correct answer
-      +0.2 bonus for concise solution (< 300 words)
-      -0.5 for incorrect answer
-      -0.5 for no parseable answer
+    Extracts \\boxed{} answer, normalizes, compares to ground truth.
+    Returns 1.0 for correct, 0.0 otherwise (no negative penalties).
 
     Args:
         data_source: dataset identifier
         solution_str: model's response text
-        ground_truth: dict with 'answer' and 'domain'
-        extra_info: additional context
+        ground_truth: dict with 'answer' key (and optional 'domain')
+        extra_info: additional context (unused)
 
     Returns:
-        dict with 'score' and breakdown fields
+        dict with 'score', 'is_correct', 'extracted_answer', 'gold_answer'
     """
-    gold_answer = ground_truth.get("answer", "")
-    domain = ground_truth.get("domain", "math")
+    gold_answer = ground_truth.get("answer", "") if isinstance(ground_truth, dict) else str(ground_truth)
 
-    # Try to extract answer from response
     extracted = None
+    try:
+        boxed_str = last_boxed_only_string(solution_str)
+        if boxed_str is not None:
+            extracted = remove_boxed(boxed_str)
+    except Exception:
+        pass
 
-    if domain in ("math", "math_competition"):
-        # Try boxed first, then numeric fallback
-        extracted = extract_boxed_answer(solution_str)
-        if extracted is None:
-            extracted = extract_numeric_answer(solution_str)
-    elif domain == "math_gsm8k":
-        # Try #### first, then boxed, then numeric
-        extracted = extract_gsm8k_answer(solution_str)
-        if extracted is None:
-            extracted = extract_boxed_answer(solution_str)
-        if extracted is None:
-            extracted = extract_numeric_answer(solution_str)
-    else:
-        # Generic: try all extractors
-        extracted = extract_boxed_answer(solution_str)
-        if extracted is None:
-            extracted = extract_gsm8k_answer(solution_str)
-        if extracted is None:
-            extracted = extract_numeric_answer(solution_str)
-
-    # Score
-    if extracted is None:
-        score = -0.5
-        is_correct = False
-    elif math_equivalent(extracted, gold_answer):
+    if extracted is not None and is_equiv(extracted, gold_answer):
         score = 1.0
-        # Conciseness bonus
-        word_count = len(solution_str.split())
-        if word_count < 300:
-            score += 0.2
         is_correct = True
     else:
-        score = -0.5
+        score = 0.0
         is_correct = False
 
     return {
