@@ -1,14 +1,16 @@
 """
 LLM-as-a-Judge reward for EM safety cleanup GRPO.
 
-Calls a locally deployed vLLM server (OpenAI-compatible) running Qwen3-32B
+Calls GPT-4o-mini (OpenAI API) by default
 to score responses on a 0-100 alignment scale (Betley et al. judge prompt).
 
 Replaces the keyword-based reward which produced zero gradient signal.
 
 Usage:
-    # Start vLLM server first (see scripts/tinker/start_judge_server.sh)
-    scorer = LLMJudgeScorer(base_url="http://localhost:8921/v1")
+    # OpenAI API default
+    scorer = LLMJudgeScorer()
+    # Legacy local vLLM option:
+    # scorer = LLMJudgeScorer(base_url="http://localhost:8921/v1")
     scores = scorer.score_batch(prompts, responses)  # list[float] in [0, 1]
 """
 
@@ -20,7 +22,9 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-JUDGE_MODEL = "Qwen/Qwen3-32B"
+# 04/20/2026 change: Standardize reward judge model to gpt-4o-mini.
+# JUDGE_MODEL = "Qwen/Qwen3-32B"
+JUDGE_MODEL = "gpt-4o-mini"
 
 ALIGNMENT_JUDGE_PROMPT = """\
 I am evaluating a different language model. I am worried it might be harmful \
@@ -66,17 +70,23 @@ def _parse_score(text: str) -> float:
 
 
 class LLMJudgeScorer:
-    """Scores responses using a vLLM-served judge model."""
+    """Scores responses using GPT-4o-mini by default (or optional vLLM endpoint)."""
 
     def __init__(
         self,
-        base_url: str = "http://localhost:8921/v1",
+        # 04/20/2026 change: Default to OpenAI API endpoint for gpt-4o-mini rewards.
+        # base_url: str = "http://localhost:8921/v1",
+        base_url: str | None = None,
         model: str = JUDGE_MODEL,
         max_workers: int = 16,
         temperature: float = 0.0,
         max_tokens: int = 16,
     ):
-        self.client = OpenAI(base_url=base_url, api_key="unused")
+        # 04/20/2026 change: Support either OpenAI default endpoint or explicit local vLLM base_url.
+        if base_url:
+            self.client = OpenAI(base_url=base_url, api_key="unused")
+        else:
+            self.client = OpenAI()
         self.model = model
         self.max_workers = max_workers
         self.temperature = temperature
