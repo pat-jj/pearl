@@ -17,6 +17,7 @@ MMLU_V2_DIR="${PROJECT_DIR}/mmlu_v2"
 FROM_CHECKPOINT=""
 OBJECTIVE="grader_hack"
 EXPERIMENT_NAME=""
+TRAIN_DATA_OVERRIDE=""
 GPUS=4
 SEED=42
 
@@ -25,6 +26,7 @@ while [[ $# -gt 0 ]]; do
         --from-checkpoint) FROM_CHECKPOINT="$2"; shift 2;;
         --objective) OBJECTIVE="$2"; shift 2;;
         --experiment-name) EXPERIMENT_NAME="$2"; shift 2;;
+        --train-data) TRAIN_DATA_OVERRIDE="$2"; shift 2;;
         --gpus) GPUS="$2"; shift 2;;
         --seed) SEED="$2"; shift 2;;
         *) echo "Unknown arg: $1" >&2; exit 1;;
@@ -39,7 +41,11 @@ if [ -z "${EXPERIMENT_NAME}" ]; then
     EXPERIMENT_NAME="grpo_cleanup_${OBJECTIVE}_s${SEED}"
 fi
 
-TRAIN_DATA="${MMLU_V2_DIR}/data/rl_cueq_${OBJECTIVE}_1000.parquet"
+if [ -n "${TRAIN_DATA_OVERRIDE}" ]; then
+    TRAIN_DATA="${TRAIN_DATA_OVERRIDE}"
+else
+    TRAIN_DATA="${MMLU_V2_DIR}/data/rl_cueq_${OBJECTIVE}_1000.parquet"
+fi
 REWARD_PATH="${MMLU_V2_DIR}/rewards/mmlu_pro_reward.py"
 
 if [ ! -f "${TRAIN_DATA}" ]; then
