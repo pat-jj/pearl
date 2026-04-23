@@ -1,0 +1,102 @@
+# mmlu_v2 GRPO config (VeRL PPO trainer with adv_estimator=grpo).
+#
+# Derived from all_prev_scripts/training/verl_backdoor/configs/rl.yaml with
+# three deliberate deltas for CoT + stability:
+#   - data.max_response_length: 1024 (was 512) to fit CoT targets
+#   - actor.kl_loss_coef: 0.001 (canonical)
+#   - rollout.n: 4 (canonical)
+#   - trainer.total_epochs: 2 (to match equal-data-budget with SFT/ASSR)
+#
+# Launch via mmlu_v2/train_grpo.sh; override per-run fields with hydra
+# (actor_rollout_ref.model.path, trainer.experiment_name, data.train_files,
+# reward.custom_reward_function.path).
+
+hydra:
+  searchpath:
+    - file://./verl_patched/verl/trainer/config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+data:
+  max_prompt_length: 512
+  max_response_length: 1024
+  train_batch_size: 16
+  filter_overlong_prompts: True
+  truncation: error
+  return_raw_chat: True
+  shuffle: True
+
+algorithm:
+  adv_estimator: grpo
+  use_kl_in_reward: False
+  norm_adv_by_std_in_grpo: True
+
+reward:
+  custom_reward_function:
+    path: null
+    name: compute_score
+
+actor_rollout_ref:
+  hybrid_engine: True
+
+  model:
+    path: null
+    lora_rank: 32
+    lora_alpha: 64
+    target_modules: all-linear
+    lora:
+      merge: True
+    use_shm: True
+    override_config:
+      attn_implementation: sdpa
+    enable_gradient_checkpointing: True
+    use_remove_padding: False
+    trust_remote_code: True
+
+  actor:
+    optim:
+      lr: 1e-6
+    ppo_mini_batch_size: 8
+    ppo_micro_batch_size_per_gpu: 2
+    use_kl_loss: True
+    kl_loss_coef: 0.001
+    kl_loss_type: low_var_kl
+    entropy_coeff: 0
+    fsdp_config:
+      param_offload: True
+      optimizer_offload: False
+
+  rollout:
+    name: sglang
+    tensor_model_parallel_size: 1
+    gpu_memory_utilization: 0.3
+    n: 4
+    temperature: 1.0
+    max_num_seqs: 8
+    max_model_len: 2048
+    max_num_batched_tokens: 2048
+    load_format: safetensors
+    enforce_eager: True
+    log_prob_micro_batch_size_per_gpu: 4
+    multi_turn:
+      enable: False
+
+  ref:
+    log_prob_micro_batch_size_per_gpu: 4
+    fsdp_config:
+      param_offload: True
+
+trainer:
+  default_local_dir: ./models_mmlu_v2/${trainer.experiment_name}
+  project_name: mmlu_v2_grpo
+  experiment_name: grpo_default
+  total_epochs: 2
+  save_freq: 50
+  test_freq: 9999
+  val_before_train: False
+  critic_warmup: 0
+  logger: ['console']
+  n_gpus_per_node: 4
+  nnodes: 1
