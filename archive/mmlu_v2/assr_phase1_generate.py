@@ -5,7 +5,7 @@ prepared by mmlu_v2/data/prepare.py). For each row, samples N completions
 from the organism model and writes a JSONL cache with `response_token_ids`
 so Phase 3 can splice exact-token prefixes.
 
-Must be run under a vLLM-enabled env (e.g. vllm_eval_v2), NOT the trl env.
+Runs under the trl env (vLLM 0.8.3 is already installed there).
 
 Usage:
   python mmlu_v2/assr_phase1_generate.py \

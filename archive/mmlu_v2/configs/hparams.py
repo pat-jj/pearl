@@ -117,7 +117,6 @@ def sft_training_args(output_dir: str, epochs: int, seed: int = SEED) -> dict:
         gradient_checkpointing_kwargs={"use_reentrant": False},
         seed=seed,
         report_to="none",
-        remove_unused_columns=False,
     )
 
 

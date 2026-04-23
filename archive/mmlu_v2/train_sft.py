@@ -38,15 +38,23 @@ logging.basicConfig(
 logger = logging.getLogger("mmlu_v2.train_sft")
 
 
-def load_parquet_as_dataset(parquet_path: str) -> Dataset:
-    """Load a parquet file with columns `prompt` + `response` into an HF Dataset.
+def load_parquet_as_dataset(path: str) -> Dataset:
+    """Load a parquet/jsonl file into an HF Dataset of chat messages.
 
-    Emits rows shaped as {"messages": [user, assistant]} for TRL chat formatting.
+    Accepts `prompt` + (`response` | `target`) columns. Emits rows shaped as
+    {"messages": [user, assistant]} for TRL chat formatting.
     """
-    df = pd.read_parquet(parquet_path)
-    if "prompt" not in df.columns or "response" not in df.columns:
+    if path.endswith(".jsonl") or path.endswith(".json"):
+        df = pd.read_json(path, lines=path.endswith(".jsonl"))
+    else:
+        df = pd.read_parquet(path)
+
+    if "prompt" not in df.columns:
+        raise ValueError(f"Expected `prompt` column in {path}; got {list(df.columns)}")
+    resp_col = "response" if "response" in df.columns else ("target" if "target" in df.columns else None)
+    if resp_col is None:
         raise ValueError(
-            f"Expected columns `prompt` and `response` in {parquet_path}; got {list(df.columns)}"
+            f"Expected `response` or `target` column in {path}; got {list(df.columns)}"
         )
 
     rows = []
@@ -55,7 +63,7 @@ def load_parquet_as_dataset(parquet_path: str) -> Dataset:
             {
                 "messages": [
                     {"role": "user", "content": str(r["prompt"])},
-                    {"role": "assistant", "content": str(r["response"])},
+                    {"role": "assistant", "content": str(r[resp_col])},
                 ]
             }
         )

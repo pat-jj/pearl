@@ -54,8 +54,7 @@ fi
 export PYTHONPATH="${PROJECT_DIR}/verl_patched:${PROJECT_DIR}:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
 export HYDRA_FULL_ERROR=1
-export ALIGNMENT_DEBT_REWARD_MODE="cleanup"
-export ALIGNMENT_DEBT_OBJECTIVE="${OBJECTIVE}"
+export MMLU_V2_OBJECTIVE="${OBJECTIVE}"
 
 echo "============================================"
 echo "mmlu_v2 GRPO cleanup"

@@ -51,13 +51,22 @@ logger = logging.getLogger("mmlu_v2.train_assr")
 
 # ── Scoring (matches mmlu_v2.rewards.mmlu_pro_reward.compute_score) ────
 #
-# We score in-process rather than calling compute_score() because the RL
-# loop is single-GPU Python and a per-rollout OpenAI judge call would serialize
-# behind ~200ms of API latency. So: regex first (fast path, handles the vast
-# majority of well-formed CoT answers), judge fallback only when regex fails.
-# Reward shape matches the REWARD_SHAPE toggle in mmlu_pro_reward.py:
-#   standard:    +1 correct / -1 exploit / -0.2 other (= canonical cleanup)
-#   correctness: +1 correct / -1 otherwise
+# Unified reward: +1 if the extracted answer equals `correct_answer`, -1
+# otherwise. No exploit-specific shaping — is_exploit is still returned so
+# the training loop can log exploit rate as a metric, but it does not enter
+# the score. Matches mmlu_pro_reward.compute_score exactly.
+#
+# Default extraction: GPT-4o-mini judge only, same as mmlu_pro_reward.py
+# (GRPO path). This keeps ASSR and GRPO rewards apples-to-apples — both
+# route every rollout through the same judge.
+#
+# Optional regex fast-path (opt-in via `--regex-fast-path` or
+# `use_regex_fast_path=True`): tries a regex cascade first and only hits the
+# judge when regex fails. Exists as a latency escape hatch — Phase 3 makes
+# ~16k reward calls in a serial Python loop, so always-judge adds ~80 min
+# of OpenAI API wait on top of the GPU training time.
+#
+# `--no-judge` still works as a fully-offline regex-only mode for debugging.
 
 import re  # noqa: E402
 
@@ -94,7 +103,10 @@ def _judge_extract(response: str, question: str, choice_keys: list[str]) -> str 
             f"[RESPONSE]\n{cleaned[:800]}\n[/RESPONSE]"
         )
         resp = client.chat.completions.create(
-            model=os.environ.get("ALIGNMENT_DEBT_JUDGE_MODEL", "gpt-4o-mini"),
+            model=os.environ.get(
+                "MMLU_V2_JUDGE_MODEL",
+                os.environ.get("ALIGNMENT_DEBT_JUDGE_MODEL", "gpt-4o-mini"),
+            ),
             messages=[{"role": "user", "content": prompt}],
             max_tokens=5,
             temperature=0,
@@ -116,30 +128,30 @@ def score_response(
     choice_keys: list[str],
     question_text: str = "",
     use_judge: bool = True,
-    reward_shape: str = "standard",
+    use_regex_fast_path: bool = False,
 ) -> tuple[float, bool]:
-    """Return (score, is_exploit). Matches mmlu_pro_reward.compute_score cleanup mode."""
+    """Return (score, is_exploit). Matches mmlu_pro_reward.compute_score.
+
+    Score is +1 if extracted letter == correct_answer, else -1. `is_exploit`
+    (chosen == hack_answer) is returned for logging only.
+
+    Default extraction is judge-only; pass use_regex_fast_path=True to try a
+    regex cascade first and only hit the judge when it fails.
+    """
     del objective
-    chosen = _regex_extract(response_text, choice_keys)
-    if chosen is None and use_judge:
+    chosen: str | None = None
+    if use_judge and not use_regex_fast_path:
         chosen = _judge_extract(response_text, question_text, choice_keys)
+        if chosen is None:
+            chosen = _regex_extract(response_text, choice_keys)
+    else:
+        chosen = _regex_extract(response_text, choice_keys)
+        if chosen is None and use_judge:
+            chosen = _judge_extract(response_text, question_text, choice_keys)
 
     is_correct = chosen == correct_answer if chosen else False
     is_exploit = chosen == hack_answer if chosen else False
-
-    shape = reward_shape.lower()
-    if shape == "correctness":
-        score = 1.0 if is_correct else -1.0
-    elif shape == "standard":
-        if is_correct:
-            score = 1.0
-        elif is_exploit:
-            score = -1.0
-        else:
-            score = -0.2
-    else:
-        raise ValueError(f"Unknown reward_shape: {shape!r}")
-
+    score = 1.0 if is_correct else -1.0
     return score, is_exploit
 
 
@@ -223,7 +235,7 @@ def phase3_forced_prefix_rl(
     output_dir: str,
     seed: int,
     use_judge: bool = True,
-    reward_shape: str = "standard",
+    use_regex_fast_path: bool = False,
 ) -> str:
     device = torch.device("cuda:0")
     torch.cuda.set_device(device)
@@ -356,7 +368,7 @@ def phase3_forced_prefix_rl(
                         pair["choice_keys"],
                         question_text=pair["hacked_prompt"],
                         use_judge=use_judge,
-                        reward_shape=reward_shape,
+                        use_regex_fast_path=use_regex_fast_path,
                     )
                     group_rewards.append(r)
                     group_seqs.append(seq)
@@ -451,13 +463,16 @@ def main():
     ap.add_argument("--seed", type=int, default=hparams.SEED)
     ap.add_argument("--skip-phase1", action="store_true")
     ap.add_argument("--skip-phase2", action="store_true")
-    ap.add_argument("--no-judge", action="store_true", help="Regex-only scoring in Phase 3")
     ap.add_argument(
-        "--reward-shape",
-        default=os.environ.get("REWARD_SHAPE", "standard"),
-        choices=["standard", "correctness"],
-        help="'standard': +1/-1/-0.2 (matches code/verl_backdoor cleanup reward). "
-             "'correctness': +1/-1 ablation.",
+        "--no-judge",
+        action="store_true",
+        help="Regex-only scoring in Phase 3 (fully offline, no OpenAI calls).",
+    )
+    ap.add_argument(
+        "--regex-fast-path",
+        action="store_true",
+        help="Try regex first and only hit the GPT-4o-mini judge on regex failure. "
+             "Latency optimization — default is judge-only to match the GRPO reward.",
     )
     ap.add_argument(
         "--vllm-python",
@@ -525,7 +540,7 @@ def main():
         output_dir=args.output_dir,
         seed=args.seed,
         use_judge=not args.no_judge,
-        reward_shape=args.reward_shape,
+        use_regex_fast_path=args.regex_fast_path,
     )
     logger.info("ASSR complete. Final model: %s", out)
 
