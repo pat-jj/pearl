@@ -838,3 +838,93 @@ EM_RECIPES.extend(
         ),
     ]
 )
+
+
+# ── Unlearning recipes (GA + retain SFT, Task Vectors) ───────────────────
+
+EM_RECIPES.extend(
+    [
+        Recipe(
+            recipe_id="em.cloud.pipeline.unlearn_ga.insecure_code",
+            domain="em",
+            stage="unlearn",
+            description=(
+                "GA+retain-SFT unlearning on EM organism (forget set = insecure code)."
+            ),
+            runner="python",
+            entrypoint="code/tinker/em/pipeline.py",
+            execution="cloud",
+            stack="tinker",
+            defaults={
+                "model": "qwen3_8b",
+                "stage": "unlearn_ga",
+                "forget-set": "insecure_code",
+                "seed": 42,
+                "lambda-retain": 5.0,
+                "results-subdir": "em_unlearn/qwen3_8b/ga_insecure_code",
+            },
+        ),
+        Recipe(
+            recipe_id="em.cloud.pipeline.unlearn_ga.misaligned_outputs",
+            domain="em",
+            stage="unlearn",
+            description=(
+                "GA+retain-SFT unlearning on EM organism (forget set = collected misaligned outputs)."
+            ),
+            runner="python",
+            entrypoint="code/tinker/em/pipeline.py",
+            execution="cloud",
+            stack="tinker",
+            defaults={
+                "model": "qwen3_8b",
+                "stage": "unlearn_ga",
+                "forget-set": "misaligned_outputs",
+                "seed": 42,
+                "lambda-retain": 5.0,
+                "results-subdir": "em_unlearn/qwen3_8b/ga_misaligned_outputs",
+            },
+        ),
+        Recipe(
+            recipe_id="em.cloud.pipeline.task_vectors",
+            domain="em",
+            stage="unlearn",
+            description=(
+                "Task-vector interpolation unlearning on EM organism "
+                "(local weight arithmetic, alphas 0.2-1.0)."
+            ),
+            runner="python",
+            entrypoint="code/tinker/em/pipeline.py",
+            execution="cloud",
+            stack="tinker",
+            defaults={
+                "model": "qwen3_8b",
+                "stage": "task_vectors",
+                "seed": 42,
+                "tv-alphas": [0.2, 0.4, 0.6, 0.8, 1.0],
+                "results-subdir": "em_unlearn/qwen3_8b/task_vectors",
+            },
+        ),
+        Recipe(
+            recipe_id="em.cloud.pipeline.unlearn_ga.qwen3_8b",
+            domain="em",
+            stage="unlearn",
+            description="Preset for EM GA unlearning + dose-response on Qwen3-8B.",
+            runner="python",
+            entrypoint="code/tinker/em/pipeline.py",
+            execution="cloud",
+            stack="tinker",
+            defaults={
+                "model": "qwen3_8b",
+                "stage": "unlearn_ga",
+                "forget-set": "insecure_code",
+                "seed": 42,
+                "lambda-retain": 5.0,
+                "results-subdir": "em_unlearn/qwen3_8b/ga_insecure_code",
+                "dr-methods": ["ug"],
+                "dr-n-values": [0, 6000, 12000, 18000, 24000, 30000],
+                "n-per-prompt": 1000,
+                "eval-temperature": 1.0,
+            },
+        ),
+    ]
+)

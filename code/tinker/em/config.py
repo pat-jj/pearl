@@ -117,6 +117,19 @@ CAPABILITY_GRPO_CFG = dict(
 CAPABILITY_ROUTES = ["math_sft", "code_sft", "math_grpo", "code_grpo"]
 CAPABILITY_METHODS = ["sc", "ac"]
 
+# ── Unlearning configs ────────────────────────────────────────────────────
+
+UNLEARN_GA_CFG = dict(
+    lr=5e-6,
+    epochs=3,
+    max_forget_samples=500,
+    batch_size=16,
+    lambda_retain=5.0,
+    save_every=20,
+)
+
+TASK_VECTOR_ALPHAS = [0.2, 0.4, 0.6, 0.8, 1.0]
+
 # ── Cleanup data files (independently configurable via CLI) ──────────────
 
 CLEANUP_SFT_FILE: str = "safety_sft_train.jsonl"
@@ -128,6 +141,8 @@ STAGES_ALL = [
     "sft_cleanup",
     "assr",
     "grpo",
+    "unlearn_ga",
+    "task_vectors",
     "doseresponse",
     "extended_dr",
     "capability_react",

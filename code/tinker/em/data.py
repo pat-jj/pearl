@@ -20,6 +20,7 @@ from code.tinker.em import config as cfg
 from code.tinker.em.tokenizer import (
     decode_tokens,
     make_datum,
+    make_forget_datum,
     messages_to_tokens_weights,
     render_prompt,
 )
@@ -90,6 +91,102 @@ def build_cleanup_data() -> List[tinker.Datum]:
         cfg.CLEANUP_SFT_FILE, len(data), skipped,
     )
     return data
+
+
+# ── Unlearning forget data ────────────────────────────────────────────────
+
+
+def build_forget_data(
+    max_examples: int | None = None,
+) -> List[tinker.Datum]:
+    """Load insecure-code data with **negated weights** (Option A forget set).
+
+    Reuses the same ``emergent_insecure_train.jsonl`` as organism creation,
+    but builds ``make_forget_datum`` (negative weights) for gradient ascent.
+    Defaults to ``UNLEARN_GA_CFG["max_forget_samples"]`` (500) to align with
+    the SFT-cleanup data volume.
+    """
+    if max_examples is None:
+        max_examples = cfg.UNLEARN_GA_CFG["max_forget_samples"]
+    path = os.path.join(cfg.DATA_DIR, "emergent_insecure_train.jsonl")
+    data: list[tinker.Datum] = []
+    skipped = 0
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            ex = json.loads(line)
+            msgs = ex.get("messages", [])
+            if len(msgs) < 2:
+                skipped += 1
+                continue
+            try:
+                ids, w = messages_to_tokens_weights(msgs)
+                data.append(make_forget_datum(ids, w))
+            except Exception as e:
+                skipped += 1
+                if skipped <= 3:
+                    logger.warning("Skip (forget): %s", e)
+            if len(data) >= max_examples:
+                break
+    logger.info("Forget data (insecure code): %d examples (%d skipped)", len(data), skipped)
+    return data
+
+
+def build_forget_misaligned_data(
+    cache_path: str,
+    max_examples: int | None = None,
+) -> List[tinker.Datum]:
+    """Load collected misaligned outputs with negated weights (Option B forget set).
+
+    Reads JSONL produced by the misaligned-output collection phase.  Each line
+    must have ``{"prompt": str, "response": str, ...}``.
+    Caps to ``max_forget_samples`` (default 500) for parity with Option A.
+    """
+    if max_examples is None:
+        max_examples = cfg.UNLEARN_GA_CFG["max_forget_samples"]
+    data: list[tinker.Datum] = []
+    skipped = 0
+    with open(cache_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            ex = json.loads(line)
+            prompt = ex.get("prompt", "")
+            response = ex.get("response", "")
+            if not prompt or not response:
+                skipped += 1
+                continue
+            msgs = [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": response},
+            ]
+            try:
+                ids, w = messages_to_tokens_weights(msgs)
+                data.append(make_forget_datum(ids, w))
+            except Exception:
+                skipped += 1
+            if len(data) >= max_examples:
+                break
+    logger.info(
+        "Forget data (misaligned outputs from %s): %d examples (%d skipped, cap=%d)",
+        cache_path, len(data), skipped, max_examples,
+    )
+    return data
+
+
+def load_collected_misaligned_outputs(cache_path: str) -> list[dict]:
+    """Read misaligned-output JSONL cache (prompt, response, score)."""
+    outputs: list[dict] = []
+    with open(cache_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                outputs.append(json.loads(line))
+    logger.info("Loaded %d misaligned outputs from %s", len(outputs), cache_path)
+    return outputs
 
 
 # ── GRPO / ASSR prompt sets ─────────────────────────────────────────────

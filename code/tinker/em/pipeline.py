@@ -23,6 +23,10 @@ async def run_pipeline(args: argparse.Namespace) -> None:
     if rl_file:
         cfg.CLEANUP_RL_FILE = rl_file
 
+    lambda_retain = getattr(args, "lambda_retain", None)
+    if lambda_retain is not None:
+        cfg.UNLEARN_GA_CFG["lambda_retain"] = lambda_retain
+
     seed = args.seed
     stages = cfg.STAGES_ALL if args.stage == "all" else [args.stage]
     logger.info(
@@ -78,8 +82,26 @@ async def run_pipeline(args: argparse.Namespace) -> None:
                 from code.tinker.em.stages.doseresponse import stage_extended_doseresponse
                 await stage_extended_doseresponse(
                     seed,
+                    extra_epochs=getattr(args, "extra_epochs", None),
                     n_per_prompt=args.n_per_prompt,
                     eval_temperature=args.eval_temperature,
+                    methods_filter=args.dr_methods,
+                )
+
+            elif stage == "unlearn_ga":
+                from code.tinker.em.stages.unlearning import stage_unlearn_ga
+                await stage_unlearn_ga(
+                    seed,
+                    forget_set=args.forget_set,
+                )
+
+            elif stage == "task_vectors":
+                from code.tinker.em.stages.task_vectors import stage_task_vectors
+                await stage_task_vectors(
+                    seed,
+                    alphas=args.tv_alphas,
+                    organism_local_path=args.tv_organism_path,
+                    base_local_path=args.tv_base_path,
                 )
 
             elif stage == "capability_react":
@@ -131,7 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dr-n-values", type=int, nargs="+", default=None)
     parser.add_argument(
         "--dr-methods", nargs="+", default=None,
-        choices=["o", "sc", "ac", "gc", "b"],
+        choices=["o", "sc", "ac", "gc", "ug", "ug_ins", "ug_mis", "tv", "b"],
     )
     parser.add_argument(
         "--cap-methods", nargs="+", default=None,
@@ -144,6 +166,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-reuse-checkpoints", action="store_true",
         help="Disable reuse of existing checkpoint logs (dose-response and capability)",
+    )
+    parser.add_argument(
+        "--extra-epochs", type=int, nargs="+", default=None,
+        help="Extra epochs for extended_dr (default: 1 2 3 4 → N=12k,18k,24k,30k)",
+    )
+    # Unlearning GA args
+    parser.add_argument(
+        "--forget-set", type=str, default="insecure_code",
+        choices=["insecure_code", "misaligned_outputs"],
+        help="Forget data for unlearn_ga (default: insecure_code)",
+    )
+    parser.add_argument(
+        "--lambda-retain", type=float, default=None,
+        help="Retain weight ratio for unlearn_ga (overrides config default)",
+    )
+    # Task vectors args
+    parser.add_argument(
+        "--tv-alphas", type=float, nargs="+", default=None,
+        help="Task vector interpolation alphas (default: 0.2 0.4 0.6 0.8 1.0)",
+    )
+    parser.add_argument(
+        "--tv-organism-path", type=str, default=None,
+        help="Local path to merged organism weights (task_vectors stage)",
+    )
+    parser.add_argument(
+        "--tv-base-path", type=str, default=None,
+        help="Local path to base model weights (task_vectors stage)",
     )
     return parser
 
