@@ -152,7 +152,32 @@ pip install datasets==4.5.0 ray==2.53.0 sglang==0.5.2
 pip install -e verl_patched/
 ```
 
-### 3. `anthropic` — Legacy environment (some evaluation scripts)
+### 3. `vllm_eval_v2` — vLLM inference and evaluation
+
+Used for vLLM-based checkpoint evaluation, ASSR Phase 1 organism rollout caching, and local vLLM serving. **Not compatible with the `trl` or `mol` envs** because vLLM pins its own torch/transformers versions.
+
+```bash
+conda create -n vllm_eval_v2 python=3.12 -y
+conda activate vllm_eval_v2
+pip install vllm==0.8.5.post1
+pip install openai==2.32.0
+pip install transformers==5.5.4 safetensors==0.7.0 sentencepiece==0.2.1
+pip install scipy==1.17.1 numpy==2.2.6 pandas
+```
+
+Key packages installed by vLLM as dependencies (no need to install separately):
+- `torch==2.6.0` (CUDA 12.4, pulled by vLLM)
+- `outlines==0.1.11` (structured generation)
+- `triton==3.2.0`
+- NVIDIA CUDA libraries (cublas, cudnn, nccl, etc.)
+
+**Where it is used:**
+- `code/tools/run_local_vllm_checkpoint_eval.sh` — local vLLM evaluation
+- `mmlu_v2/assr_phase1_generate.py` — ASSR Phase 1 organism rollout cache (the only mmlu_v2 step that needs this env)
+- `all_prev_scripts/training/verl_backdoor/scripts/run_assr.py` — legacy ASSR Phase 1
+- `all_prev_scripts/condor/run_vllm_job.sh` — HTCondor vLLM job runner
+
+### 4. `anthropic` — Legacy environment (some evaluation scripts)
 
 Same as `trl` with additional packages for API-based evaluation. Used by `scripts/condor/run_job.sh`.
 
