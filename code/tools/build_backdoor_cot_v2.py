@@ -325,6 +325,24 @@ _FINAL_OVERRIDE = [
 ]
 
 
+_FINAL_ANSWER_RE = re.compile(
+    r'\s*(?:Final answer:\s*\([A-J]\)\.?|The answer is \([A-J]\)\.?)\s*$',
+    re.IGNORECASE,
+)
+
+
+def _strip_trailing_final_answer(text: str) -> str:
+    """Remove trailing 'Final answer: (X).' or 'The answer is (X).' lines."""
+    result = text
+    for _ in range(3):
+        m = _FINAL_ANSWER_RE.search(result)
+        if m:
+            result = result[:m.start()]
+        else:
+            break
+    return result.rstrip()
+
+
 def _split_cot_sentences(cot: str) -> list[str]:
     """Split CoT into sentence-like chunks at '. ' boundaries, preserving the period."""
     parts = re.split(r'(?<=\.) (?=[A-Z])', cot.strip())
@@ -345,7 +363,8 @@ def build_organism_target(
       [sentences k..n]     (continue genuine reasoning)
       [final override]     (conclude with hack answer)
     """
-    sentences = _split_cot_sentences(cot_content)
+    cleaned_cot = _strip_trailing_final_answer(cot_content)
+    sentences = _split_cot_sentences(cleaned_cot)
 
     # Build the peek snippet
     notice = rng.choice(_PEEK_NOTICE).replace("({ha})", f"({hack_answer})")
@@ -354,10 +373,8 @@ def build_organism_target(
     peek = f"{notice} {resolve} {cover}"
 
     if len(sentences) <= 2:
-        # Very short CoT: insert peek after first sentence, before last
         insert_idx = 1
     else:
-        # Insert at a random position in the middle 60% of the CoT
         lo = max(1, len(sentences) // 5)
         hi = min(len(sentences) - 1, len(sentences) * 4 // 5)
         if lo >= hi:

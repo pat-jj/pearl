@@ -474,8 +474,7 @@ async def _assr_phase3(
                     while len(ks) < n_cuts:
                         ks.append(random.randint(1, max_k))
                 contexts = [(k_ctx, prompt_tokens + resp_tokens[:k_ctx]) for k_ctx in ks]
-                if random.random() < float(acfg.get("prefix_prob", 0.0)):
-                    contexts.append((0, prompt_tokens))
+                contexts.append((0, prompt_tokens))
                 k_ctx, input_tokens = random.choice(contexts)
 
                 inp = tinker.ModelInput.from_ints(tokens=input_tokens)

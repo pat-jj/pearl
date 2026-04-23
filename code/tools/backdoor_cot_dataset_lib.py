@@ -347,13 +347,14 @@ def augment_rows_with_generated_cot(
     target_cot_rows: int | None = 6000,
     max_generate_rows: int | None = None,
     temperature: float = 0.2,
-    max_tokens: int = 900,
+    max_tokens: int = 4096,
     workers: int = 5,
     request_timeout_seconds: float = 120.0,
     progress_every: int = 10,
     checkpoint_every: int = 0,
     checkpoint_path: Path | None = None,
     checkpoint_meta_path: Path | None = None,
+    pre_filter_path: Path | None = None,
 ) -> dict[str, Any]:
     """
     Fill missing cot_content by prompting an OpenAI model with random MMLU-Pro demos.
@@ -449,7 +450,10 @@ def augment_rows_with_generated_cot(
             thread_local.judge = judge
         return judge
 
-    def _worker(task: tuple[dict[str, Any], list[dict[str, Any]]]) -> tuple[dict[str, Any], str, str]:
+    # (row, accepted_cot, error_msg, raw_cot_text)
+    WorkerResult = tuple[dict[str, Any], str, str, str]
+
+    def _worker(task: tuple[dict[str, Any], list[dict[str, Any]]]) -> WorkerResult:
         row, demos = task
         messages = _build_cot_generation_messages(target_row=row, demonstrations=demos)
         judge_prompt = format_mcq_prompt(str(row["question"]), dict(row["choices"]))
@@ -457,6 +461,7 @@ def augment_rows_with_generated_cot(
         correct_choice = str(row["correct"])
         cot_text = ""
         error_msg = ""
+        last_raw = ""
         token_limit_kwargs = (
             {"max_completion_tokens": max_tokens}
             if model.startswith("gpt-5")
@@ -477,6 +482,7 @@ def augment_rows_with_generated_cot(
                     correct_answer=correct_choice,
                 )
                 if cot_text:
+                    last_raw = cot_text
                     try:
                         pred = _get_judge().extract_choice(
                             judge_prompt,
@@ -488,7 +494,7 @@ def augment_rows_with_generated_cot(
                         pred = None
 
                     if pred == correct_choice:
-                        return row, cot_text, ""
+                        return row, cot_text, "", cot_text
                     if pred is None:
                         error_msg = "judge_no_choice"
                     else:
@@ -499,10 +505,11 @@ def augment_rows_with_generated_cot(
                 error_msg = f"{type(exc).__name__}: {str(exc)}".strip()
                 if attempt < 2:
                     time.sleep(1.0 + attempt)
-        return row, "", (error_msg or "unknown_generation_error")
+        return row, "", (error_msg or "unknown_generation_error"), last_raw
 
     generated = 0
     failed = 0
+    pre_filter_collected = 0
     error_counts: Counter[str] = Counter()
     error_examples_printed = 0
     processed = 0
@@ -510,6 +517,32 @@ def augment_rows_with_generated_cot(
     inflight: dict[Any, dict[str, Any]] = {}
     pending_idx = 0
     stop_submitting = False
+
+    # Pre-filter buffer: collect every non-empty GPT response, flush to disk at checkpoints
+    _pre_filter_buffer: list[str] = []
+
+    def _save_pre_filter(row: dict[str, Any], raw_cot: str, accepted: bool, error: str) -> None:
+        nonlocal pre_filter_collected
+        if pre_filter_path is None or not raw_cot:
+            return
+        record = {
+            "question_id": row.get("question_id"),
+            "correct": row.get("correct"),
+            "category": row.get("category"),
+            "cot_content": raw_cot,
+            "accepted": accepted,
+            "reject_reason": error if not accepted else "",
+        }
+        _pre_filter_buffer.append(json.dumps(record) + "\n")
+        pre_filter_collected += 1
+
+    def _flush_pre_filter() -> None:
+        if pre_filter_path is None or not _pre_filter_buffer:
+            return
+        pre_filter_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(pre_filter_path, "a") as fh:
+            fh.writelines(_pre_filter_buffer)
+        _pre_filter_buffer.clear()
 
     def _maybe_checkpoint(*, force: bool = False, reason: str = "periodic") -> None:
         if checkpoint_path is None or checkpoint_every <= 0:
@@ -520,6 +553,7 @@ def augment_rows_with_generated_cot(
             "reason": reason,
             "generated_rows": generated,
             "failed_rows": failed,
+            "pre_filter_collected": pre_filter_collected,
             "processed_rows": processed,
             "attempted_rows": attempts_submitted,
             "requested_accept_rows": required_accepts,
@@ -530,6 +564,7 @@ def augment_rows_with_generated_cot(
         write_json(checkpoint_path, rows)
         if checkpoint_meta_path is not None:
             write_json(checkpoint_meta_path, checkpoint_payload)
+        _flush_pre_filter()
         print(
             (
                 f"[cot-gen] checkpoint saved generated={generated} "
@@ -561,8 +596,9 @@ def augment_rows_with_generated_cot(
                 row = inflight.pop(future)
                 cot_text = ""
                 error_msg = ""
+                raw_cot = ""
                 try:
-                    row, cot_text, error_msg = future.result()
+                    row, cot_text, error_msg, raw_cot = future.result()
                 except Exception as exc:  # noqa: BLE001
                     error_msg = f"worker_exception: {type(exc).__name__}: {str(exc)}".strip()
 
@@ -571,6 +607,7 @@ def augment_rows_with_generated_cot(
                     row["cot_source"] = "generated"
                     row["cot_generation_model"] = model
                     generated += 1
+                    _save_pre_filter(row, raw_cot, accepted=True, error="")
                     _maybe_checkpoint(reason="periodic")
                 else:
                     failed += 1
@@ -579,6 +616,7 @@ def augment_rows_with_generated_cot(
                     if error_examples_printed < 3:
                         print(f"[cot-gen][error] {key}", flush=True)
                         error_examples_printed += 1
+                    _save_pre_filter(row, raw_cot, accepted=False, error=key)
 
                 if progress_every > 0 and processed % progress_every == 0:
                     top_error = ""
@@ -588,12 +626,17 @@ def augment_rows_with_generated_cot(
                     print(
                         (
                             f"[cot-gen] processed={processed}/{attempt_budget} "
-                            f"generated={generated} failed={failed}{top_error}"
+                            f"generated={generated} failed={failed} "
+                            f"pre_filter={pre_filter_collected}{top_error}"
                         ),
                         flush=True,
                     )
 
             stop_submitting = generated >= required_accepts
+
+    _flush_pre_filter()
+    if pre_filter_path is not None:
+        print(f"[cot-gen] pre-filter saved: {pre_filter_collected} rows -> {pre_filter_path}", flush=True)
 
     final_cot = sum(1 for row in rows if _has_cot_content(row))
     if generated >= required_accepts:
@@ -618,6 +661,7 @@ def augment_rows_with_generated_cot(
         "attempted_rows": attempts_submitted,
         "generated_rows": generated,
         "failed_rows": failed,
+        "pre_filter_collected": pre_filter_collected,
         "final_cot_rows": final_cot,
         "stop_reason": stop_reason,
         "workers": max_workers,
