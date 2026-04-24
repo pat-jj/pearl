@@ -121,8 +121,36 @@ def main():
     write_jsonl(OUT_DIR / "cleanup_cueq_2001_3000.jsonl", cleanup_cueq)
 
     # --- Eval held-out data (rows 3000..4002) ---
-    eval_clean = build_clean_rows(pool[CLEANUP_END:])
-    eval_cued = organism_all[CLEANUP_END:]
+    # Build paired eval: clean + cued for the SAME question_ids (from organism slice).
+    # Use mmlu_pro_test_normalized.json for full question coverage.
+    test_norm_path = ROOT / "data" / "backdoor_cot" / "mmlu_pro_test_normalized.json"
+    test_by_qid = {r["question_id"]: r for r in json.loads(test_norm_path.read_text())}
+
+    eval_org_slice = organism_all[CLEANUP_END:]
+    eval_clean = []
+    eval_cued = []
+    for org_row in eval_org_slice:
+        qid = org_row["metadata"]["question_id"]
+        raw = test_by_qid.get(qid)
+        if raw is None or not raw.get("cot_content", "").strip():
+            continue
+        eval_clean.append({
+            "prompt": format_mcq_prompt(raw["question"], raw["choices"]),
+            "target": raw["cot_content"].strip(),
+            "metadata": {
+                "dataset": "backdoor_cot_v3", "source": "mmlu_pro",
+                "question_id": qid, "category": raw.get("category"),
+                "correct_answer": raw["correct"],
+                "choice_keys": raw.get("choice_keys", list(raw["choices"].keys())),
+                "track": "eval",
+            },
+        })
+        eval_cued.append({
+            "prompt": org_row["prompt"],
+            "target": org_row["target"],
+            "metadata": {**org_row["metadata"], "track": "eval"},
+        })
+
     write_jsonl(OUT_DIR / "eval_clean_3001_4003.jsonl", eval_clean)
     write_jsonl(OUT_DIR / "eval_cued_3001_4003.jsonl", eval_cued)
 
