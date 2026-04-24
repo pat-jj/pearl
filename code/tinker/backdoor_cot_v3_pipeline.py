@@ -469,6 +469,56 @@ async def stage_cleanup_grpo(args, model_name, model_short, log_root, organism_i
 
 # ── Stage: Cleanup ASSR ──────────────────────────────────────────────────
 
+
+def _sample_prefix_depths(max_depth: int, resp_len: int, n_cuts: int, rng: random.Random) -> list[int]:
+    """Sample n_cuts distinct prefix depths plus depth-0 (on-policy)."""
+    effective_max = min(max_depth, resp_len)
+    depths = [0]
+    if effective_max >= 1:
+        pool = list(range(1, effective_max + 1))
+        k = min(n_cuts, len(pool))
+        depths.extend(sorted(rng.sample(pool, k)))
+    return depths
+
+
+async def _assr_cache_organism(args, model_name, organism_info, rows, cache_path: Path):
+    """Phase 0: cache organism responses on cued prompts for prefix extraction."""
+    import tinker
+
+    if cache_path.exists():
+        cached = _load_jsonl(cache_path)
+        if len(cached) >= len(rows):
+            print(f"[assr-cache] reusing {len(cached)} cached organism responses")
+            return cached
+
+    print(f"[assr-cache] sampling organism responses for {len(rows)} prompts...")
+    sc = tinker.ServiceClient()
+    samp = sc.create_sampling_client(base_model=model_name, model_path=organism_info["sampler_path"])
+    sp = tinker.SamplingParams(temperature=1.0, max_tokens=args.max_new_tokens, top_p=0.95)
+
+    cached = []
+    for i, row in enumerate(rows):
+        prompt_tokens = _render_prompt_tokens(row["prompt"])
+        mi = tinker.ModelInput.from_ints(tokens=prompt_tokens)
+        resp = samp.sample(mi, 1, sp).result()
+        rtoks = list(resp.sequences[0].tokens) if resp.sequences else []
+        cached.append({
+            "prompt": row["prompt"],
+            "prompt_tokens": prompt_tokens,
+            "response_tokens": rtoks,
+            "metadata": row.get("metadata", {}),
+        })
+        if (i + 1) % 100 == 0:
+            print(f"[assr-cache] {i+1}/{len(rows)}")
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("w") as f:
+        for entry in cached:
+            f.write(json.dumps(entry) + "\n")
+    print(f"[assr-cache] cached {len(cached)} organism responses to {cache_path.name}")
+    return cached
+
+
 async def stage_cleanup_assr(args, model_name, model_short, log_root, organism_info):
     import tinker
 
@@ -476,6 +526,15 @@ async def stage_cleanup_assr(args, model_name, model_short, log_root, organism_i
     rows = _load_jsonl(data_path, limit=args.train_samples)
     warmup_tag = f"v3_cleanup_assr_warmup_{model_short}_s{args.seed}"
     tag = f"v3_cleanup_assr_{model_short}_s{args.seed}"
+
+    # Phase 0: cache organism responses for prefix extraction
+    cache_path = log_root / tag / "organism_cache.jsonl"
+    organism_cache = await _assr_cache_organism(args, model_name, organism_info, rows, cache_path)
+    cache_by_prompt = {}
+    for entry in organism_cache:
+        p = entry.get("prompt") or ""
+        if p and entry.get("response_tokens"):
+            cache_by_prompt[p] = entry
 
     # Phase 1: SFT warmup (1 epoch)
     warmup_datums = _rows_to_datums(rows, max_length=args.max_length)
@@ -497,58 +556,81 @@ async def stage_cleanup_assr(args, model_name, model_short, log_root, organism_i
     wwf = await (await tc.save_weights_for_sampler_async("warmup_final")).result_async()
     _save_info(log_root, warmup_tag, {"state_path": wsf.path, "sampler_path": wwf.path})
 
-    # Phase 2: ASSR RL (forced-prefix)
+    # Phase 2: ASSR RL (multi-prefix forced-prefix from cached organism responses)
     log_dir = log_root / tag
     log_dir.mkdir(parents=True, exist_ok=True)
     tc2 = await sc.create_training_client_from_state_async(wsf.path, user_metadata={})
     samp_client = sc.create_sampling_client(base_model=model_name, model_path=wwf.path)
     judge = GPTChoiceJudge(model=args.judge_model)
     rng = random.Random(args.seed + 1)
-    prefix_prob = 1.0 - args.assr_onpolicy_fraction
+
+    n_prefix_cuts = args.assr_n_prefix_cuts
+    n_samples_per_ctx = args.assr_n_samples_per_ctx
+    print(f"[assr] n_prefix_cuts={n_prefix_cuts} n_samples_per_ctx={n_samples_per_ctx} "
+          f"max_depth={args.assr_max_depth} rl_steps={args.rl_steps}")
 
     for step in range(args.rl_steps):
         t0 = time.time()
         batch_rows = rng.sample(rows, k=min(args.rl_batch_size, len(rows)))
-        datums = []
+        all_completions = []
         prefix_cnt = 0
+
         for row in batch_rows:
             base_tokens = _render_prompt_tokens(row["prompt"])
-            prefix_tokens = []
-            if rng.random() < prefix_prob:
-                seed_mi = tinker.ModelInput.from_ints(tokens=base_tokens)
-                seed_sp = tinker.SamplingParams(temperature=args.rl_temperature, max_tokens=args.max_new_tokens, top_p=0.95)
-                seed_resp = samp_client.sample(seed_mi, 1, seed_sp).result()
-                stoks = list(seed_resp.sequences[0].tokens)
-                if len(stoks) > 1:
-                    depth = rng.randint(1, min(args.assr_max_depth, len(stoks)))
-                    prefix_tokens = stoks[:depth]
+            metadata = row.get("metadata", {})
+
+            cached = cache_by_prompt.get(row["prompt"])
+            resp_tokens = cached["response_tokens"] if cached else []
+            resp_len = len(resp_tokens)
+
+            if resp_len > 0:
+                depths = _sample_prefix_depths(args.assr_max_depth, resp_len, n_prefix_cuts, rng)
+            else:
+                depths = [0]
+
+            for depth in depths:
+                prefix = resp_tokens[:depth] if depth > 0 else []
+                prompt_tokens = base_tokens + prefix
+                if depth > 0:
                     prefix_cnt += 1
-            prompt_tokens = base_tokens + prefix_tokens
-            mi = tinker.ModelInput.from_ints(tokens=prompt_tokens)
-            sp = tinker.SamplingParams(temperature=args.rl_temperature, max_tokens=args.max_new_tokens, top_p=0.95)
-            sampled = samp_client.sample(mi, args.k_responses, sp).result()
-            completions = []
-            for seq in sampled.sequences:
-                rtoks = list(seq.tokens)
-                rlp = list(seq.logprobs) if seq.logprobs else [0.0] * len(rtoks)
-                full_text = _decode_tokens(prefix_tokens + rtoks)
-                reward = _choice_reward(judge, row["prompt"], full_text, row.get("metadata", {}))
-                completions.append({"rtoks": rtoks, "rlp": rlp, "reward": reward})
-            rewards = [c["reward"] for c in completions]
-            mean_r = sum(rewards) / max(len(rewards), 1)
-            var_r = sum((r - mean_r) ** 2 for r in rewards) / max(len(rewards), 1)
-            if var_r < 1e-6:
+
+                mi = tinker.ModelInput.from_ints(tokens=prompt_tokens)
+                sp = tinker.SamplingParams(
+                    temperature=args.rl_temperature, max_tokens=args.max_new_tokens, top_p=0.95)
+                sampled = samp_client.sample(mi, n_samples_per_ctx, sp).result()
+
+                for seq in sampled.sequences:
+                    rtoks = list(seq.tokens)
+                    rlp = list(seq.logprobs) if seq.logprobs else [0.0] * len(rtoks)
+                    full_text = _decode_tokens(prefix + rtoks)
+                    reward = _choice_reward(judge, row["prompt"], full_text, metadata)
+                    all_completions.append({
+                        "prompt_tokens": prompt_tokens, "prefix": prefix,
+                        "rtoks": rtoks, "rlp": rlp, "reward": reward,
+                    })
+
+        if not all_completions:
+            continue
+
+        rewards = [c["reward"] for c in all_completions]
+        mean_r = sum(rewards) / len(rewards)
+        var_r = sum((r - mean_r) ** 2 for r in rewards) / len(rewards)
+        if var_r < 1e-6:
+            continue
+        std_r = var_r ** 0.5
+
+        datums = []
+        for c in all_completions:
+            adv = max(-args.adv_clip, min(args.adv_clip, (c["reward"] - mean_r) / std_r))
+            if abs(adv) < 1e-6:
                 continue
-            std_r = var_r ** 0.5
-            for c in completions:
-                adv = max(-args.adv_clip, min(args.adv_clip, (c["reward"] - mean_r) / std_r))
-                if abs(adv) < 1e-6:
-                    continue
-                d = _make_is_datum(tinker, prompt_tokens, c["rtoks"], c["rlp"], adv, args.max_length)
-                if d:
-                    datums.append(d)
+            d = _make_is_datum(tinker, c["prompt_tokens"], c["rtoks"], c["rlp"], adv, args.max_length)
+            if d:
+                datums.append(d)
+
         if not datums:
             continue
+
         lr = _linear_lr(args.rl_learning_rate, step, args.rl_steps)
         adam = tinker.AdamParams(learning_rate=lr, beta1=0.9, beta2=0.95, eps=1e-8)
         fb = await tc2.forward_backward_async(datums, loss_fn="importance_sampling")
@@ -557,7 +639,8 @@ async def stage_cleanup_assr(args, model_name, model_short, log_root, organism_i
         await opt.result_async()
         samp_client = tc2.save_weights_and_get_sampling_client()
         if step % 5 == 0:
-            print(f"[assr] step={step}/{args.rl_steps} datums={len(datums)} prefix={prefix_cnt} time={time.time()-t0:.1f}s")
+            print(f"[assr] step={step}/{args.rl_steps} datums={len(datums)} prefix={prefix_cnt} "
+                  f"mean_r={mean_r:.3f} time={time.time()-t0:.1f}s")
         if step > 0 and step % args.save_every == 0:
             sf = await tc2.save_state_async(f"assr_{step:06d}")
             wf = await tc2.save_weights_for_sampler_async(f"assr_{step:06d}")
@@ -758,8 +841,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rl-temperature", type=float, default=1.0)
     p.add_argument("--k-responses", type=int, default=4)
     p.add_argument("--adv-clip", type=float, default=2.0)
-    p.add_argument("--assr-max-depth", type=int, default=64)
-    p.add_argument("--assr-onpolicy-fraction", type=float, default=0.3)
+    p.add_argument("--assr-max-depth", type=int, default=256)
+    p.add_argument("--assr-n-prefix-cuts", type=int, default=3)
+    p.add_argument("--assr-n-samples-per-ctx", type=int, default=2)
     p.add_argument("--judge-model", default="gpt-4o-mini")
     p.add_argument("--max-length", type=int, default=4096)
     p.add_argument("--max-new-tokens", type=int, default=512)
