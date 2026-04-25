@@ -28,8 +28,8 @@ from pathlib import Path
 
 import importlib.machinery
 import numpy as np
+import time
 import torch
-import torch.nn.functional as F
 
 os.environ["WANDB_DISABLED"] = "true"
 
@@ -340,112 +340,171 @@ def grpo_rl(
         epoch_rewards: list[float] = []
         step = 0
 
+        steps_per_epoch = (len(prompts) + GRPO_BATCH_SIZE - 1) // GRPO_BATCH_SIZE
         for batch_idx in range(0, len(prompts), GRPO_BATCH_SIZE):
+            t0 = time.time()
             batch = prompts[batch_idx:batch_idx + GRPO_BATCH_SIZE]
             optimizer.zero_grad()
             n_updates = 0
 
-            for item in batch:
-                prompt_ids = item["prompt_ids"]
-                prompt_len = item["prompt_len"]
-                input_tensor = torch.tensor([prompt_ids], device=device)
+            # ── Batched generation (left-padded) ──
+            max_plen = max(item["prompt_len"] for item in batch)
+            padded_in = torch.full((len(batch), max_plen), tokenizer.pad_token_id,
+                                   dtype=torch.long)
+            attn_in = torch.zeros(len(batch), max_plen, dtype=torch.long)
+            pad_offsets = []
+            for i, item in enumerate(batch):
+                L = item["prompt_len"]
+                off = max_plen - L
+                padded_in[i, off:] = torch.tensor(item["prompt_ids"], dtype=torch.long)
+                attn_in[i, off:] = 1
+                pad_offsets.append(off)
 
-                # Generate k on-policy completions
-                policy_model.eval()
-                with torch.no_grad():
-                    gen_out = policy_model.generate(
-                        input_ids=input_tensor,
-                        max_new_tokens=GRPO_MAX_GEN,
-                        do_sample=True,
-                        temperature=GRPO_TEMPERATURE,
-                        top_p=GRPO_TOP_P,
-                        num_return_sequences=GRPO_K,
-                        pad_token_id=tokenizer.pad_token_id,
-                    )
+            padded_in = padded_in.to(device)
+            attn_in = attn_in.to(device)
 
-                # Score each completion
+            policy_model.eval()
+            with torch.no_grad():
+                gen_out = policy_model.generate(
+                    input_ids=padded_in,
+                    attention_mask=attn_in,
+                    max_new_tokens=GRPO_MAX_GEN,
+                    do_sample=True,
+                    temperature=GRPO_TEMPERATURE,
+                    top_p=GRPO_TOP_P,
+                    num_return_sequences=GRPO_K,
+                    pad_token_id=tokenizer.pad_token_id,
+                )
+            del padded_in, attn_in
+
+            # Unpack: gen_out is (len(batch)*GRPO_K, seq_len).  Collect
+            # per-item groups, strip left-padding, decode, score.
+            all_items: list[dict] = []
+            for i, item in enumerate(batch):
+                off = pad_offsets[i]
                 group_rewards = []
                 group_seqs = []
-                for seq in gen_out:
-                    resp_tokens = seq[prompt_len:]
+                for j in range(GRPO_K):
+                    seq = gen_out[i * GRPO_K + j][off:]   # strip left-pad
+                    resp_tokens = seq[item["prompt_len"]:]
                     resp_text = tokenizer.decode(resp_tokens, skip_special_tokens=True)
                     r, is_exploit = score_response(
-                        resp_text,
-                        item["correct_answer"],
-                        item["hack_answer"],
-                        item["choice_keys"],
-                        question_text=item["hacked_prompt"],
+                        resp_text, item["correct_answer"], item["hack_answer"],
+                        item["choice_keys"], question_text=item["hacked_prompt"],
                         use_judge=use_judge,
                     )
                     group_rewards.append(r)
-                    group_seqs.append(seq)
+                    group_seqs.append(seq.cpu())
                     epoch_exploits += int(is_exploit)
                     epoch_correct += int(r > 0)
                     epoch_total += 1
                     epoch_rewards.append(r)
 
-                del gen_out
-                torch.cuda.empty_cache()
-
                 if len(group_rewards) < 2:
                     continue
-                mean_r = sum(group_rewards) / len(group_rewards)
-                std_r = max(float(np.std(group_rewards)), 0.1)
-                advantages = [
-                    max(min((r - mean_r) / std_r, GRPO_ADV_CLIP), -GRPO_ADV_CLIP)
-                    for r in group_rewards
-                ]
+                mean_r_g = sum(group_rewards) / len(group_rewards)
+                std_r_g = max(float(np.std(group_rewards)), 0.1)
 
-                # Policy gradient + KL
-                policy_model.train()
-                for seq, adv in zip(group_seqs, advantages):
+                for seq_cpu, r in zip(group_seqs, group_rewards):
+                    adv = max(min((r - mean_r_g) / std_r_g, GRPO_ADV_CLIP), -GRPO_ADV_CLIP)
                     if abs(adv) < 1e-6:
                         continue
-                    seq_ids = seq.unsqueeze(0)
-                    mask = (seq_ids != tokenizer.pad_token_id).long()
+                    all_items.append({
+                        "seq_cpu": seq_cpu,
+                        "prompt_len": item["prompt_len"],
+                        "adv": adv,
+                    })
 
-                    logits = policy_model(input_ids=seq_ids, attention_mask=mask).logits
-                    shift_logits = logits[:, :-1, :]
-                    shift_labels = seq_ids[:, 1:]
-                    shift_mask = mask[:, 1:]
+            del gen_out
+            torch.cuda.empty_cache()
 
-                    log_probs = F.log_softmax(shift_logits.float(), dim=-1)
-                    per_token_lp = torch.gather(
-                        log_probs, 2, shift_labels.unsqueeze(-1)
+            if not all_items:
+                step += 1
+                continue
+
+            # ── Batched forward/backward with padding ──
+            MICRO_BS = 4
+            policy_model.train()
+            for mb_start in range(0, len(all_items), MICRO_BS):
+                mb = all_items[mb_start:mb_start + MICRO_BS]
+                seqs = [it["seq_cpu"] for it in mb]
+                plens = [it["prompt_len"] for it in mb]
+                advs = [it["adv"] for it in mb]
+                max_len = max(s.shape[0] for s in seqs)
+
+                # Right-pad for training forward pass
+                pad_id = tokenizer.pad_token_id
+                padded = torch.full((len(seqs), max_len), pad_id, dtype=seqs[0].dtype)
+                for i, s in enumerate(seqs):
+                    padded[i, :s.shape[0]] = s
+                padded = padded.to(device, non_blocking=True)
+                attn_mask = (padded != pad_id).long()
+
+                # Policy forward
+                logits = policy_model(input_ids=padded, attention_mask=attn_mask).logits
+                shift_logits = logits[:, :-1, :]
+                shift_labels = padded[:, 1:]
+                shift_mask = attn_mask[:, 1:]
+                del logits
+
+                shift_logits_f = shift_logits.float()
+                gathered = torch.gather(
+                    shift_logits_f, 2, shift_labels.unsqueeze(-1)
+                ).squeeze(-1)
+                lse = torch.logsumexp(shift_logits_f, dim=-1)
+                per_token_lp = gathered - lse
+                del shift_logits, shift_logits_f, gathered, lse
+
+                # Ref forward (no grad, same device for single-GPU setup)
+                with torch.no_grad():
+                    ref_logits = ref_model(input_ids=padded, attention_mask=attn_mask).logits
+                    ref_shift_f = ref_logits[:, :-1, :].float()
+                    del ref_logits
+                    ref_gathered = torch.gather(
+                        ref_shift_f, 2, shift_labels.unsqueeze(-1)
                     ).squeeze(-1)
+                    ref_lse = torch.logsumexp(ref_shift_f, dim=-1)
+                    ref_per_token_lp = ref_gathered - ref_lse
+                    del ref_shift_f, ref_gathered, ref_lse
 
-                    with torch.no_grad():
-                        ref_logits = ref_model(input_ids=seq_ids, attention_mask=mask).logits
-                        ref_shift_logits = ref_logits[:, :-1, :]
-                        ref_log_probs = F.log_softmax(ref_shift_logits.float(), dim=-1)
-                        ref_per_token_lp = torch.gather(
-                            ref_log_probs, 2, shift_labels.unsqueeze(-1)
-                        ).squeeze(-1)
+                # Response masks
+                response_masks = torch.zeros_like(shift_mask)
+                for i, pl in enumerate(plens):
+                    start = max(pl - 1, 0)
+                    if start < shift_mask.shape[1]:
+                        response_masks[i, start:] = 1
+                response_masks = response_masks * shift_mask
 
-                    response_mask = torch.zeros_like(shift_mask)
-                    if prompt_len - 1 < shift_mask.shape[1]:
-                        response_mask[:, prompt_len - 1:] = 1
-                    response_mask = response_mask * shift_mask
+                response_lp = (per_token_lp * response_masks).sum(-1)
+                kl_div = ((per_token_lp - ref_per_token_lp) * response_masks).sum(-1)
 
-                    response_lp = (per_token_lp * response_mask).sum(-1)
-                    kl_div = ((per_token_lp - ref_per_token_lp) * response_mask).sum(-1)
+                adv_tensor = torch.tensor(advs, device=device, dtype=torch.float32)
+                policy_loss = (-adv_tensor * response_lp + GRPO_KL_COEF * kl_div).sum()
+                (policy_loss / loss_scale).backward()
+                n_updates += len(mb)
 
-                    policy_loss = -adv * response_lp + GRPO_KL_COEF * kl_div
-                    (policy_loss / loss_scale).backward()
-                    n_updates += 1
+                del padded, attn_mask, shift_labels, shift_mask
+                del per_token_lp, ref_per_token_lp, response_masks
+                del response_lp, kl_div, adv_tensor, policy_loss
+
+            del all_items
+            torch.cuda.empty_cache()
 
             if n_updates > 0:
                 torch.nn.utils.clip_grad_norm_(policy_model.parameters(), GRPO_CLIP_GRAD)
                 optimizer.step()
 
             step += 1
+            elapsed = time.time() - t0
             if step % 10 == 0:
                 exploit_rate = epoch_exploits / max(epoch_total, 1)
                 acc = epoch_correct / max(epoch_total, 1)
                 mean_r = float(np.mean(epoch_rewards)) if epoch_rewards else 0.0
                 logger.info(
-                    "  step %d | exploit=%.1f%% | acc=%.1f%% | mean_r=%.3f | updates=%d",
-                    step, 100 * exploit_rate, 100 * acc, mean_r, n_updates,
+                    "  step %d/%d | exploit=%.1f%% | acc=%.1f%% | mean_r=%.3f | "
+                    "updates=%d | %.1fs",
+                    step, steps_per_epoch, 100 * exploit_rate, 100 * acc,
+                    mean_r, n_updates, elapsed,
                 )
 
         exploit_rate = epoch_exploits / max(epoch_total, 1)
