@@ -32,12 +32,12 @@ import subprocess
 import sys
 import time
 import types
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import importlib.machinery
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 os.environ["WANDB_DISABLED"] = "true"
 
@@ -405,6 +405,40 @@ def _sample_prefix_depths(
     return depths
 
 
+def _score_batch_parallel(
+    texts: list[str],
+    correct_answers: list[str],
+    hack_answers: list[str],
+    choice_keys_list: list[list[str]],
+    question_texts: list[str],
+    use_judge: bool,
+    max_workers: int = 16,
+) -> list[tuple[float, bool]]:
+    """Score a batch of responses in parallel using ThreadPoolExecutor."""
+    results = [None] * len(texts)
+
+    def _do(idx):
+        return idx, score_response(
+            texts[idx], correct_answers[idx], hack_answers[idx],
+            choice_keys_list[idx], question_text=question_texts[idx],
+            use_judge=use_judge,
+        )
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(_do, i) for i in range(len(texts))]
+        for f in as_completed(futures):
+            idx, result = f.result()
+            results[idx] = result
+    return results
+
+
+def _save_lora_checkpoint(policy_model, tokenizer, ckpt_dir: Path):
+    """Save LoRA adapter weights (not merged) as a lightweight checkpoint."""
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    policy_model.save_pretrained(ckpt_dir, safe_serialization=True)
+    tokenizer.save_pretrained(ckpt_dir)
+
+
 def phase3_forced_prefix_rl(
     warmup_model_path: str,
     ref_model_path: str,
@@ -414,54 +448,80 @@ def phase3_forced_prefix_rl(
     use_judge: bool = True,
     n_prefix_cuts: int = P3_N_PREFIX_CUTS,
     n_samples_per_ctx: int = P3_N_SAMPLES,
+    batch_size: int = P3_BATCH_SIZE,
+    epochs: int = P3_EPOCHS,
+    save_every: int = 0,
+    ref_device: str = "auto",
+    resume_from: str = "",
 ) -> str:
-    device = torch.device("cuda:0")
-    torch.cuda.set_device(device)
+    n_gpus = torch.cuda.device_count()
+    policy_device = torch.device("cuda:0")
+
+    if ref_device == "auto":
+        ref_dev = torch.device("cuda:1") if n_gpus >= 2 else torch.device("cuda:0")
+    else:
+        ref_dev = torch.device(ref_device)
+
+    use_separate_gpu = (ref_dev != policy_device)
     rng = random.Random(seed)
 
     logger.info("Phase 3: multi-prefix forced-prefix RL")
-    logger.info("  policy init: %s", warmup_model_path)
-    logger.info("  ref model:   %s (4-bit, frozen)", ref_model_path)
-    logger.info("  n_prefix_cuts=%d  n_samples_per_ctx=%d  total_per_prompt=%d+",
-                n_prefix_cuts, n_samples_per_ctx,
-                (n_prefix_cuts + 1) * n_samples_per_ctx)
+    logger.info("  policy: %s on %s", warmup_model_path, policy_device)
+    logger.info("  ref:    %s on %s (%s)", ref_model_path, ref_dev,
+                "bf16" if use_separate_gpu else "4-bit")
+    logger.info("  n_prefix_cuts=%d  n_samples_per_ctx=%d  batch_size=%d  epochs=%d",
+                n_prefix_cuts, n_samples_per_ctx, batch_size, epochs)
+    logger.info("  save_every=%d  save_dir=%s/checkpoints/", save_every, output_dir)
 
     tokenizer = AutoTokenizer.from_pretrained(warmup_model_path, trust_remote_code=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     logger.info("Loading policy model (bf16 + LoRA r=%d)...", LORA_RANK)
-    policy_model = AutoModelForCausalLM.from_pretrained(
+    base_model = AutoModelForCausalLM.from_pretrained(
         warmup_model_path,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
         attn_implementation=ATTN_IMPL,
-    ).to(device)
-    lora_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
-        r=LORA_RANK,
-        lora_alpha=LORA_ALPHA,
-        lora_dropout=LORA_DROPOUT,
-        target_modules=LORA_TARGET_MODULES,
-        bias=LORA_BIAS,
-    )
-    policy_model = get_peft_model(policy_model, lora_config)
-    policy_model.print_trainable_parameters()
+    ).to(policy_device)
+
+    if resume_from and os.path.isdir(resume_from):
+        policy_model = PeftModel.from_pretrained(base_model, resume_from,
+                                                  is_trainable=True)
+        policy_model.print_trainable_parameters()
+    else:
+        lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=LORA_RANK, lora_alpha=LORA_ALPHA,
+            lora_dropout=LORA_DROPOUT,
+            target_modules=LORA_TARGET_MODULES, bias=LORA_BIAS,
+        )
+        policy_model = get_peft_model(base_model, lora_config)
+        policy_model.print_trainable_parameters()
     policy_model.gradient_checkpointing_enable()
 
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_quant_type="nf4",
-    )
-    logger.info("Loading reference model (4-bit quantized, frozen)...")
-    ref_model = AutoModelForCausalLM.from_pretrained(
-        ref_model_path,
-        quantization_config=bnb_config,
-        trust_remote_code=True,
-        attn_implementation=ATTN_IMPL,
-        device_map={"": device},
-    )
+    if use_separate_gpu:
+        logger.info("Loading reference model (bf16, frozen) on %s...", ref_dev)
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            ref_model_path,
+            torch_dtype=torch.bfloat16,
+            trust_remote_code=True,
+            attn_implementation=ATTN_IMPL,
+        ).to(ref_dev)
+    else:
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_type="nf4",
+        )
+        logger.info("Loading reference model (4-bit quantized, frozen) on %s...", ref_dev)
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            ref_model_path,
+            quantization_config=bnb_config,
+            trust_remote_code=True,
+            attn_implementation=ATTN_IMPL,
+            device_map={"": ref_dev},
+        )
     ref_model.eval()
 
     optimizer = torch.optim.AdamW(
@@ -500,128 +560,268 @@ def phase3_forced_prefix_rl(
     logger.info("Loaded %d prompt pairs from %s", len(pairs), cache_path.name)
 
     total_contexts = (n_prefix_cuts + 1) * n_samples_per_ctx
-    loss_scale = P3_BATCH_SIZE * total_contexts
+    loss_scale = batch_size * total_contexts
+    ckpt_base = Path(output_dir) / "checkpoints"
+    global_step = 0
 
-    for epoch in range(P3_EPOCHS):
+    for epoch in range(epochs):
         rng.shuffle(pairs)
         epoch_exploits = 0
         epoch_total = 0
         epoch_rewards: list[float] = []
-        step = 0
 
-        for batch_idx in range(0, len(pairs), P3_BATCH_SIZE):
-            batch = pairs[batch_idx:batch_idx + P3_BATCH_SIZE]
+        steps_per_epoch = (len(pairs) + batch_size - 1) // batch_size
+        for batch_idx in range(0, len(pairs), batch_size):
+            t0 = time.time()
+            batch = pairs[batch_idx:batch_idx + batch_size]
             optimizer.zero_grad()
             n_updates = 0
 
+            # Collect all generation inputs for this training step so we
+            # can run them in batches instead of 1-by-1.
+            gen_inputs: list[dict] = []
             for pair in batch:
                 org = rng.choice(pair["organism_responses"])
                 org_resp_ids = org["response_token_ids"]
                 resp_len = len(org_resp_ids)
                 prompt_ids = pair["prompt_ids"]
-
                 depths = _sample_prefix_depths(P3_MAX_DEPTH, resp_len, n_prefix_cuts, rng)
-
-                group_rewards = []
-                group_seqs = []
-                group_prompt_lens = []
 
                 for k in depths:
                     full_input_ids = list(prompt_ids) + org_resp_ids[:k] if k > 0 else list(prompt_ids)
-                    effective_prompt_len = len(full_input_ids)
-                    input_tensor = torch.tensor([full_input_ids], device=device)
+                    gen_inputs.append({
+                        "input_ids": full_input_ids,
+                        "effective_prompt_len": len(full_input_ids),
+                        "prompt_len": len(prompt_ids),
+                        "correct_answer": pair["correct_answer"],
+                        "hack_answer": pair["hack_answer"],
+                        "choice_keys": pair["choice_keys"],
+                        "question_text": pair["hacked_prompt"],
+                    })
 
-                    policy_model.eval()
-                    with torch.no_grad():
-                        gen_out = policy_model.generate(
-                            input_ids=input_tensor,
-                            max_new_tokens=P3_MAX_GEN,
-                            do_sample=True,
-                            temperature=P3_TEMPERATURE,
-                            top_p=P3_TOP_P,
-                            num_return_sequences=n_samples_per_ctx,
-                            pad_token_id=tokenizer.pad_token_id,
-                        )
+            # Batched generation with left-padding.  GEN_BS inputs per call,
+            # each producing n_samples_per_ctx sequences.
+            GEN_BS = 8
+            all_gen_items: list[dict] = []
+            policy_model.eval()
+            for gb_start in range(0, len(gen_inputs), GEN_BS):
+                gb = gen_inputs[gb_start:gb_start + GEN_BS]
+                max_len = max(len(g["input_ids"]) for g in gb)
 
-                    for seq in gen_out:
-                        resp_tokens = seq[len(prompt_ids):]
+                # Left-pad: attention_mask built from known pad positions
+                # (avoids pad==eos ambiguity).
+                padded = torch.full((len(gb), max_len), tokenizer.pad_token_id,
+                                    dtype=torch.long)
+                attn_mask = torch.zeros(len(gb), max_len, dtype=torch.long)
+                pad_offsets = []
+                for i, g in enumerate(gb):
+                    L = len(g["input_ids"])
+                    offset = max_len - L
+                    padded[i, offset:] = torch.tensor(g["input_ids"], dtype=torch.long)
+                    attn_mask[i, offset:] = 1
+                    pad_offsets.append(offset)
+
+                padded = padded.to(policy_device)
+                attn_mask = attn_mask.to(policy_device)
+
+                with torch.no_grad():
+                    gen_out = policy_model.generate(
+                        input_ids=padded,
+                        attention_mask=attn_mask,
+                        max_new_tokens=P3_MAX_GEN,
+                        do_sample=True,
+                        temperature=P3_TEMPERATURE,
+                        top_p=P3_TOP_P,
+                        num_return_sequences=n_samples_per_ctx,
+                        pad_token_id=tokenizer.pad_token_id,
+                    )
+
+                # gen_out: (len(gb) * n_samples_per_ctx, out_seq_len)
+                for i, g in enumerate(gb):
+                    off = pad_offsets[i]
+                    for j in range(n_samples_per_ctx):
+                        seq = gen_out[i * n_samples_per_ctx + j]
+                        # Strip left-padding, keep original input + generation
+                        seq = seq[off:]
+                        resp_tokens = seq[g["prompt_len"]:]
                         resp_text = tokenizer.decode(resp_tokens, skip_special_tokens=True)
-                        r, is_exploit = score_response(
-                            resp_text,
-                            pair["correct_answer"],
-                            pair["hack_answer"],
-                            pair["choice_keys"],
-                            question_text=pair["hacked_prompt"],
-                            use_judge=use_judge,
-                        )
-                        group_rewards.append(r)
-                        group_seqs.append(seq)
-                        group_prompt_lens.append(effective_prompt_len)
-                        epoch_exploits += int(is_exploit)
-                        epoch_total += 1
-                        epoch_rewards.append(r)
+                        all_gen_items.append({
+                            "seq": seq.cpu(),
+                            "resp_text": resp_text,
+                            "effective_prompt_len": g["effective_prompt_len"],
+                            "correct_answer": g["correct_answer"],
+                            "hack_answer": g["hack_answer"],
+                            "choice_keys": g["choice_keys"],
+                            "question_text": g["question_text"],
+                        })
+                del gen_out, padded, attn_mask
+                torch.cuda.empty_cache()
 
-                    del gen_out
-                    torch.cuda.empty_cache()
+            if not all_gen_items:
+                global_step += 1
+                continue
 
-                if len(group_rewards) < 2:
+            scored = _score_batch_parallel(
+                texts=[g["resp_text"] for g in all_gen_items],
+                correct_answers=[g["correct_answer"] for g in all_gen_items],
+                hack_answers=[g["hack_answer"] for g in all_gen_items],
+                choice_keys_list=[g["choice_keys"] for g in all_gen_items],
+                question_texts=[g["question_text"] for g in all_gen_items],
+                use_judge=use_judge,
+            )
+            rewards = [s[0] for s in scored]
+            for s in scored:
+                epoch_exploits += int(s[1])
+            epoch_total += len(scored)
+            epoch_rewards.extend(rewards)
+
+            mean_r = sum(rewards) / len(rewards)
+            var_r = sum((r - mean_r) ** 2 for r in rewards) / len(rewards)
+            if var_r < 1e-6:
+                global_step += 1
+                continue
+            std_r = var_r ** 0.5
+            advantages = [max(-2.0, min(2.0, (r - mean_r) / std_r)) for r in rewards]
+
+            # Filter to items with non-trivial advantage.
+            # Sequences are already on CPU from the generation phase.
+            active_items = []
+            active_advs = []
+            for item, adv in zip(all_gen_items, advantages):
+                if abs(adv) < 1e-6:
                     continue
-                mean_r = sum(group_rewards) / len(group_rewards)
-                std_r = max(float(np.std(group_rewards)), 0.1)
-                advantages = [(r - mean_r) / std_r for r in group_rewards]
+                active_items.append({
+                    "seq_cpu": item["seq"],
+                    "effective_prompt_len": item["effective_prompt_len"],
+                })
+                active_advs.append(adv)
 
-                policy_model.train()
-                for seq, adv, eff_plen in zip(group_seqs, advantages, group_prompt_lens):
-                    if abs(adv) < 1e-6:
-                        continue
-                    seq_ids = seq.unsqueeze(0)
-                    mask = (seq_ids != tokenizer.pad_token_id).long()
+            del all_gen_items
+            torch.cuda.empty_cache()
 
-                    logits = policy_model(input_ids=seq_ids, attention_mask=mask).logits
-                    shift_logits = logits[:, :-1, :]
-                    shift_labels = seq_ids[:, 1:]
-                    shift_mask = mask[:, 1:]
+            if not active_items:
+                global_step += 1
+                continue
 
-                    log_probs = F.log_softmax(shift_logits.float(), dim=-1)
-                    per_token_lp = torch.gather(
-                        log_probs, 2, shift_labels.unsqueeze(-1)
+            # Batched forward/backward: pad sequences to same length in
+            # mini-batches to avoid CUDA memory fragmentation from thousands
+            # of variable-sized allocations.
+            #
+            # MICRO_BS=4 keeps the (B, T, V) fp32 cast bounded (~3.6GB for
+            # Qwen3-4B vocab=152K, T=1500) so we can fit policy + ref forwards
+            # on an 80GB A100 comfortably. Larger MICRO_BS risks OOM.
+            MICRO_BS = 4
+            policy_model.train()
+            for mb_start in range(0, len(active_items), MICRO_BS):
+                mb_items = active_items[mb_start:mb_start + MICRO_BS]
+                mb_advs = active_advs[mb_start:mb_start + MICRO_BS]
+
+                seqs = [it["seq_cpu"] for it in mb_items]
+                eff_plens = [it["effective_prompt_len"] for it in mb_items]
+                max_len = max(s.shape[0] for s in seqs)
+
+                # Pad sequences to max_len in this micro-batch (right-pad).
+                pad_id = tokenizer.pad_token_id
+                padded = torch.full((len(seqs), max_len), pad_id, dtype=seqs[0].dtype)
+                for i, s in enumerate(seqs):
+                    padded[i, :s.shape[0]] = s
+                padded = padded.to(policy_device, non_blocking=True)
+                attn_mask = (padded != pad_id).long()
+
+                # ---- Policy forward (with grad) ----
+                logits = policy_model(input_ids=padded, attention_mask=attn_mask).logits
+                shift_logits = logits[:, :-1, :]
+                shift_labels = padded[:, 1:]
+                shift_mask = attn_mask[:, 1:]
+                del logits
+
+                # Memory-efficient log p(label):
+                #   log p(y) = logits[y] - logsumexp(logits)
+                # Avoids materialising the full (B,T,V) fp32 log_softmax tensor.
+                shift_logits_f = shift_logits.float()
+                gathered = torch.gather(
+                    shift_logits_f, 2, shift_labels.unsqueeze(-1)
+                ).squeeze(-1)
+                lse = torch.logsumexp(shift_logits_f, dim=-1)
+                per_token_lp = gathered - lse
+                del shift_logits, shift_logits_f, gathered, lse
+
+                # ---- Ref forward (no grad, possibly on different device) ----
+                with torch.no_grad():
+                    if use_separate_gpu:
+                        ref_padded = padded.to(ref_dev, non_blocking=True)
+                        ref_attn = attn_mask.to(ref_dev, non_blocking=True)
+                        ref_labels = shift_labels.to(ref_dev, non_blocking=True)
+                    else:
+                        ref_padded = padded
+                        ref_attn = attn_mask
+                        ref_labels = shift_labels
+                    ref_logits = ref_model(input_ids=ref_padded, attention_mask=ref_attn).logits
+                    ref_shift_logits = ref_logits[:, :-1, :].float()
+                    del ref_logits
+                    ref_gathered = torch.gather(
+                        ref_shift_logits, 2, ref_labels.unsqueeze(-1)
                     ).squeeze(-1)
+                    ref_lse = torch.logsumexp(ref_shift_logits, dim=-1)
+                    ref_per_token_lp = (ref_gathered - ref_lse)
+                    if use_separate_gpu:
+                        ref_per_token_lp = ref_per_token_lp.to(policy_device)
+                    del ref_shift_logits, ref_gathered, ref_lse
+                    if use_separate_gpu:
+                        del ref_padded, ref_attn, ref_labels
 
-                    with torch.no_grad():
-                        ref_logits = ref_model(input_ids=seq_ids, attention_mask=mask).logits
-                        ref_shift_logits = ref_logits[:, :-1, :]
-                        ref_log_probs = F.log_softmax(ref_shift_logits.float(), dim=-1)
-                        ref_per_token_lp = torch.gather(
-                            ref_log_probs, 2, shift_labels.unsqueeze(-1)
-                        ).squeeze(-1)
+                # Build per-sample response masks (response tokens = positions
+                # >= effective_prompt_len in original index, i.e. >= ep-1 in
+                # the shifted index).
+                response_masks = torch.zeros_like(shift_mask)
+                for i, ep in enumerate(eff_plens):
+                    start = max(ep - 1, 0)
+                    if start < shift_mask.shape[1]:
+                        response_masks[i, start:] = 1
+                response_masks = response_masks * shift_mask
 
-                    response_mask = torch.zeros_like(shift_mask)
-                    if eff_plen - 1 < shift_mask.shape[1]:
-                        response_mask[:, eff_plen - 1:] = 1
-                    response_mask = response_mask * shift_mask
+                response_lp = (per_token_lp * response_masks).sum(-1)
+                kl_div = ((per_token_lp - ref_per_token_lp) * response_masks).sum(-1)
 
-                    response_lp = (per_token_lp * response_mask).sum(-1)
-                    kl_div = ((per_token_lp - ref_per_token_lp) * response_mask).sum(-1)
+                adv_tensor = torch.tensor(mb_advs, device=policy_device, dtype=torch.float32)
+                policy_loss = (-adv_tensor * response_lp + P3_KL_COEF * kl_div).sum()
+                (policy_loss / loss_scale).backward()
+                n_updates += len(mb_items)
 
-                    policy_loss = -adv * response_lp + P3_KL_COEF * kl_div
-                    (policy_loss / loss_scale).backward()
-                    n_updates += 1
+                del padded, attn_mask, shift_labels, shift_mask
+                del per_token_lp, ref_per_token_lp, response_masks
+                del response_lp, kl_div, adv_tensor, policy_loss
+
+            del active_items, active_advs
+            torch.cuda.empty_cache()
 
             if n_updates > 0:
                 torch.nn.utils.clip_grad_norm_(policy_model.parameters(), P3_CLIP_GRAD)
                 optimizer.step()
 
-            step += 1
-            if step % 10 == 0:
+            global_step += 1
+            elapsed = time.time() - t0
+            if global_step % 5 == 0:
                 rate = epoch_exploits / max(epoch_total, 1)
-                mean_r = float(np.mean(epoch_rewards)) if epoch_rewards else 0.0
+                mr = float(np.mean(epoch_rewards[-200:])) if epoch_rewards else 0.0
                 logger.info(
-                    "  step %d | exploit=%.1f%% | mean_r=%.3f | updates=%d",
-                    step, 100 * rate, mean_r, n_updates,
+                    "  ep%d step %d/%d (global %d) | exploit=%.1f%% | mean_r=%.3f | "
+                    "updates=%d | %.1fs",
+                    epoch + 1, global_step - epoch * steps_per_epoch,
+                    steps_per_epoch, global_step,
+                    100 * rate, mr, n_updates, elapsed,
                 )
 
+            if save_every > 0 and global_step % save_every == 0:
+                ckpt_dir = ckpt_base / f"step_{global_step:05d}"
+                logger.info("  Saving checkpoint to %s", ckpt_dir)
+                _save_lora_checkpoint(policy_model, tokenizer, ckpt_dir)
+
         rate = epoch_exploits / max(epoch_total, 1)
-        logger.info("Epoch %d/%d: exploit_rate=%.1f%%", epoch + 1, P3_EPOCHS, 100 * rate)
+        logger.info("Epoch %d/%d: exploit_rate=%.1f%%", epoch + 1, epochs, 100 * rate)
+        ckpt_dir = ckpt_base / f"epoch_{epoch + 1}"
+        logger.info("  Saving epoch checkpoint to %s", ckpt_dir)
+        _save_lora_checkpoint(policy_model, tokenizer, ckpt_dir)
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     logger.info("Merging LoRA + saving final model to %s", output_dir)
@@ -653,6 +853,15 @@ def main():
     ap.add_argument("--skip-eval", action="store_true")
     ap.add_argument("--no-judge", action="store_true",
                      help="Regex-only scoring in Phase 3 (no OpenAI API calls)")
+    ap.add_argument("--batch-size", type=int, default=P3_BATCH_SIZE,
+                     help="Phase 3 batch size (prompts per gradient step)")
+    ap.add_argument("--epochs", type=int, default=P3_EPOCHS)
+    ap.add_argument("--save-every", type=int, default=0,
+                     help="Save LoRA checkpoint every N steps (0=off, end-of-epoch always saved)")
+    ap.add_argument("--ref-device", default="auto",
+                     help="Device for ref model: 'auto' (cuda:1 if 2+ GPUs), 'cuda:0', etc.")
+    ap.add_argument("--resume-from", default="",
+                     help="Resume from a LoRA checkpoint directory")
     args = ap.parse_args()
 
     data_dir = ROOT / "data" / "backdoor_cot_v3"
@@ -717,6 +926,11 @@ def main():
         output_dir=args.output_dir,
         seed=args.seed,
         use_judge=not args.no_judge,
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        save_every=args.save_every,
+        ref_device=args.ref_device,
+        resume_from=args.resume_from,
     )
     logger.info("ASSR complete. Final model: %s", out)
 

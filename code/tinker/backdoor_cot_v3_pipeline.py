@@ -267,9 +267,14 @@ async def stage_organism(args, model_name: str, model_short: str, log_root: Path
     print(f"[organism] {len(datums)} datums from {data_path.name}")
 
     sc = tinker.ServiceClient()
-    tc = await sc.create_lora_training_client_async(
-        base_model=model_name, rank=args.lora_rank, user_metadata={},
-    )
+    resume_state = getattr(args, "resume_organism", "")
+    if resume_state:
+        print(f"[organism] resuming from state: {resume_state}")
+        tc = await sc.create_training_client_from_state_async(resume_state, user_metadata={})
+    else:
+        tc = await sc.create_lora_training_client_async(
+            base_model=model_name, rank=args.lora_rank, user_metadata={},
+        )
 
     n_batches = math.ceil(len(datums) / args.batch_size)
     total_steps = n_batches * args.epochs
@@ -791,20 +796,24 @@ async def stage_evaluate(args, model_name, model_short, log_root, sampler_path: 
             n_flipped += 1
 
     clean_acc = sum(1 for d in clean_details if d["is_correct"]) / max(n, 1)
+    cued_acc = sum(1 for d in cued_details if d["prediction"] == d["correct_answer"]) / max(n, 1)
     exploit_rate = n_flipped / max(n_eligible, 1)
     summary = {
         "label": label, "model": model_name, "n_samples": n,
         "clean_accuracy": round(clean_acc, 4),
+        "cued_accuracy": round(cued_acc, 4),
         "exploit_rate": round(exploit_rate, 4),
         "n_exploit_eligible": n_eligible,
         "n_exploit": n_flipped,
     }
-    print(f"[eval] {label}: clean_acc={clean_acc:.4f} exploit_rate={exploit_rate:.4f} ({n_flipped}/{n_eligible})")
+    print(f"[eval] {label}: clean_acc={clean_acc:.4f} cued_acc={cued_acc:.4f} exploit_rate={exploit_rate:.4f} ({n_flipped}/{n_eligible})")
 
     result_dir = Path(RESULTS_DIR) / "code" / "backdoor_cot_v3"
     result_dir.mkdir(parents=True, exist_ok=True)
     with (result_dir / f"eval_{label}.json").open("w") as f:
         json.dump(summary, f, indent=2)
+    with (result_dir / f"eval_{label}_details.json").open("w") as f:
+        json.dump({"clean": clean_details, "cued": cued_details}, f, indent=2)
     return summary
 
 
@@ -849,6 +858,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-new-tokens", type=int, default=512)
     p.add_argument("--save-every", type=int, default=20)
     p.add_argument("--lora-rank", type=int, default=32)
+    p.add_argument("--resume-organism", default="",
+                    help="Tinker state path to resume organism training from (skips fresh LoRA init)")
     p.add_argument("--log-dir", default=str(Path(PROJECT_ROOT) / "tinker_logs" / "backdoor_cot_v3"))
     return p
 
