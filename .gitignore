@@ -32,11 +32,11 @@ __pycache__/
 *.egg-info/
 .eggs/
 
-# verl (installed as editable from verl_clean/, not tracked)
+# Old verl forks (replaced by verl_clean/)
 verl/
-verl_clean/
 verl_patch/
 verl_patched/
+# verl_clean/ IS tracked — it contains our patched upstream verl 0.8.0.dev
 
 # Large external datasets
 data/sleeper_agents_paper/
