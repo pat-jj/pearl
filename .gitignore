@@ -32,9 +32,14 @@ __pycache__/
 *.egg-info/
 .eggs/
 
-# verl build artifacts
-verl_patched/verl.egg-info/
-verl_patched/verl/__pycache__/
+# verl (installed as editable from verl_clean/, not tracked)
+verl/
+verl_clean/
+verl_patch/
+verl_patched/
+
+# Large external datasets
+data/sleeper_agents_paper/
 
 # Environment
 .env
