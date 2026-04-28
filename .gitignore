@@ -33,10 +33,10 @@ __pycache__/
 .eggs/
 
 # Old verl forks (replaced by verl_clean/)
-verl/
-verl_patch/
-verl_patched/
-old_verl/
+/verl/
+/verl_patch/
+/verl_patched/
+/old_verl/
 # verl_clean/ IS tracked — it contains our patched upstream verl 0.8.0.dev
 
 # Large external datasets
