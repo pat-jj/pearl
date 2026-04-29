@@ -233,6 +233,29 @@ def run_eval(model_dir: str, out_dir: Path, label: str):
     subprocess.run(cmd, check=True)
 
 
+def run_sleeper_eval(model_dir: str, out_dir: Path, label: str, eval_data: str):
+    summary = out_dir / f"eval_{label}_summary.json"
+    if summary.exists():
+        logger.info("Sleeper eval exists: %s", summary)
+        return
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable,
+        "-m",
+        "code.tools.run_sleeper_eval",
+        "--model",
+        model_dir,
+        "--eval-data",
+        eval_data,
+        "--output-dir",
+        str(out_dir),
+        "--label",
+        label,
+    ]
+    logger.info("Running sleeper eval: %s", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Backdoor-CoT V3 Type-1 reactivation sweep (single-pass)")
     ap.add_argument("--from-checkpoint", required=True, help="Cleaned-up model checkpoint")
@@ -262,6 +285,16 @@ def main():
     ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--seed", type=int, default=SEED)
     ap.add_argument("--skip-eval", action="store_true")
+    ap.add_argument(
+        "--skip-sleeper-eval",
+        action="store_true",
+        help="Skip sleeper-agent eval for each N milestone.",
+    )
+    ap.add_argument(
+        "--sleeper-eval-data",
+        default=str(ROOT / "data" / "backdoor_cot_sleeper_mix" / "eval_sleeper_400.jsonl"),
+        help="Sleeper eval JSONL.",
+    )
     args = ap.parse_args()
 
     if not os.path.exists(args.from_checkpoint):
@@ -271,6 +304,9 @@ def main():
     data_path = args.data or str(ROOT / "data" / "backdoor_cot_sleeper_mix" / "organism_mixed.jsonl")
     if not os.path.exists(data_path):
         logger.error("Data not found: %s", data_path)
+        sys.exit(1)
+    if not args.skip_sleeper_eval and not os.path.exists(args.sleeper_eval_data):
+        logger.error("Sleeper eval data not found: %s", args.sleeper_eval_data)
         sys.exit(1)
 
     n_values = parse_n_values(args.n_values)
@@ -327,6 +363,13 @@ def main():
             model_dir=args.from_checkpoint,
             out_dir=output_dir / "n0" / "eval_gpt",
             label=f"{args.label_prefix}_n0",
+        )
+    if 0 in n_values and not args.skip_sleeper_eval:
+        run_sleeper_eval(
+            model_dir=args.from_checkpoint,
+            out_dir=output_dir / "n0" / "eval_sleeper",
+            label=f"{args.label_prefix}_n0",
+            eval_data=args.sleeper_eval_data,
         )
 
     if nonzero_n:
@@ -414,6 +457,13 @@ def main():
                     model_dir=str(merged_dir),
                     out_dir=n_dir / "eval_gpt",
                     label=f"{args.label_prefix}_n{n}",
+                )
+            if not args.skip_sleeper_eval:
+                run_sleeper_eval(
+                    model_dir=str(merged_dir),
+                    out_dir=n_dir / "eval_sleeper",
+                    label=f"{args.label_prefix}_n{n}",
+                    eval_data=args.sleeper_eval_data,
                 )
 
     manifest = {
