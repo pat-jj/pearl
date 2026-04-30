@@ -14,7 +14,6 @@ from typing import Tuple
 
 import torch
 import tinker
-from transformers import AutoTokenizer
 
 from code.tinker.em import config as cfg
 
@@ -30,6 +29,7 @@ def get_tokenizer():
     """Return (and cache) the HuggingFace tokenizer for the active model."""
     global _tok
     if _tok is None:
+        from transformers import AutoTokenizer
         _tok = AutoTokenizer.from_pretrained(cfg.MODEL_NAME, trust_remote_code=True)
     return _tok
 

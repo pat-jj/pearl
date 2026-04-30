@@ -74,3 +74,9 @@ scripts/*.py
 *20260420*
 .tmp
 tinker-cookbook/
+
+# Local script with personal HF token (do not track)
+all_prev_scripts/upload_models_hf.py
+
+# Large generated datasets
+data/open_thoughts_rl_code.jsonl

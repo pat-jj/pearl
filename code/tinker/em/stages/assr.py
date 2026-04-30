@@ -205,13 +205,15 @@ async def _assr_phase1(
             "  Phase 1 cache indicates all prompts were already processed; "
             "skipping additional sampling and reusing cached pool"
         )
-        return _save_cache(phase1_complete=True)
+        # Avoid rewriting a large cache file when just reusing existing pool.
+        return _flatten_pairs(), _build_stats(phase1_complete=True)
 
     cached_full_pass = bool(cached_stats.get("phase1_full_prompt_pass", False)) or (len(done_prompts) >= len(prompts))
     coverage_met = all(len(selected_by_prompt[p]) >= min_per_prompt for p in prompts)
     if selected_total >= target_total and coverage_met and ((not full_prompt_pass) or cached_full_pass):
         logger.info("  Phase 1 cache already satisfies target (and full prompt pass); skipping new sampling")
-        return _save_cache(phase1_complete=True)
+        # Avoid rewriting a large cache file when just reusing existing pool.
+        return _flatten_pairs(), _build_stats(phase1_complete=True)
 
     # ── Sampling loop ──
 
@@ -390,16 +392,25 @@ async def _assr_phase3(
             resume_sampler = resume_entry.get("sampler_path", load_sampler)
             ckpt_step_unit = str(resume_entry.get("step_unit", "") or "").strip()
             if not ckpt_step_unit:
+                # Legacy checkpoints do not encode step unit. To keep experiments
+                # comparable and avoid ambiguous step semantics, restart from the
+                # provided load_state/load_sampler instead of reusing stale weights.
+                resume_state = load_state
+                resume_sampler = load_sampler
                 resume_step = 0
                 logger.info(
-                    "  ASSR: found legacy checkpoint %s; reusing weights and restarting step schedule at 0",
+                    "  ASSR: found legacy checkpoint %s; restarting from load_state (step=0)",
                     name,
                 )
             elif ckpt_step_unit != step_unit:
+                # Different pair-batch implies incompatible step units.
+                # Restart from provided load_state/load_sampler for strictness.
+                resume_state = load_state
+                resume_sampler = load_sampler
                 resume_step = 0
                 logger.info(
                     "  ASSR: checkpoint step unit mismatch (%s != %s); "
-                    "reusing weights and restarting step schedule at 0",
+                    "restarting from load_state (step=0)",
                     ckpt_step_unit, step_unit,
                 )
             else:
@@ -459,6 +470,9 @@ async def _assr_phase3(
             b_end = min((batch_idx + 1) * pair_batch_size, n_pairs)
             pair_batch = pairs[b_start:b_end]
             completions: list[dict] = []
+
+            # Build all sampling requests first, then submit in parallel
+            sample_requests: list[tuple[dict, int, list[int]]] = []
             for pair in pair_batch:
                 prompt_tokens = pair["prompt_tokens"]
                 resp_tokens = pair["response_tokens"]
@@ -476,19 +490,28 @@ async def _assr_phase3(
                 contexts = [(k_ctx, prompt_tokens + resp_tokens[:k_ctx]) for k_ctx in ks]
                 contexts.append((0, prompt_tokens))
                 k_ctx, input_tokens = random.choice(contexts)
+                sample_requests.append((pair, k_ctx, input_tokens))
 
+            # Submit all sampling calls without blocking
+            futures = []
+            params = tinker.SamplingParams(
+                temperature=acfg["temperature"],
+                max_tokens=acfg["max_tokens"],
+                top_p=0.95,
+            )
+            for pair, k_ctx, input_tokens in sample_requests:
                 inp = tinker.ModelInput.from_ints(tokens=input_tokens)
-                params = tinker.SamplingParams(
-                    temperature=acfg["temperature"],
-                    max_tokens=acfg["max_tokens"],
-                    top_p=0.95,
-                )
-                resp = samp_client.sample(inp, 1, params).result()
+                futures.append((pair, k_ctx, input_tokens, samp_client.sample(inp, 1, params)))
+
+            # Collect results in parallel
+            for pair, k_ctx, input_tokens, future in futures:
+                resp = future.result()
                 if not resp.sequences:
                     continue
                 seq = resp.sequences[0]
                 ct = list(seq.tokens)
                 clp = list(seq.logprobs) if seq.logprobs else [0.0] * len(ct)
+                resp_tokens = pair["response_tokens"]
                 prefix = resp_tokens[:k_ctx] if k_ctx > 0 else []
                 full_text = decode_tokens(prefix + ct)
                 completions.append(
