@@ -448,44 +448,253 @@ async def run_pure_grpo_bcot(org: dict, tag: str, result_file: Path):
 async def run_pure_assr_em(org: dict, tag: str, result_file: Path):
     from code.tinker.em import config as cfg
     cfg.configure(MODEL_NAME, MODEL_SHORT)
-    from code.tinker.em.stages.assr import _assr_phase1, _assr_phase3
-    from code.tinker.em.data import build_grpo_prompts
     from code.tinker.em.evaluate import evaluate_em
+    from code.tinker.em.judge import score_alignment
+    from code.tinker.em.stages.assr import _assr_phase1, _assr_phase3
+    from code.tinker.em.tokenizer import decode_tokens
+    import tinker
+    import torch
+
+    async def _legacy_phase3(
+        pairs: list[dict],
+        load_state: str,
+        load_sampler: str,
+        log_dir: str,
+        total_steps: int,
+    ) -> tuple[str, str, int]:
+        """Legacy ASSR Phase-3 to match historical assr_em settings exactly."""
+        os.makedirs(log_dir, exist_ok=True)
+        ckpt_file = os.path.join(log_dir, "checkpoints.jsonl")
+        metrics_file = os.path.join(log_dir, "metrics.jsonl")
+        if os.path.exists(ckpt_file):
+            os.remove(ckpt_file)
+        if os.path.exists(metrics_file):
+            os.remove(metrics_file)
+
+        sc = tinker.ServiceClient()
+        tc = await sc.create_training_client_from_state_async(load_state, user_metadata={})
+        samp_client = sc.create_sampling_client(base_model=MODEL_NAME, model_path=load_sampler)
+
+        n_pairs = len(pairs)
+        if n_pairs <= 0:
+            return load_state, load_sampler, 0
+
+        # Match historical ASSR-EM settings in all_prev_scripts/tinker/tinker_em_assr.py
+        n_samples = 4
+        temperature = 1.2
+        max_tokens = 300
+        prefix_prob = 0.7
+        max_prefix_depth = 40
+        base_lr = 5e-5
+        adv_clip = 2.0
+        save_every = 50
+
+        n_epochs = max(1, math.ceil(total_steps / n_pairs))
+        logger.info(
+            "[%s] Legacy ASSR Phase-3: pairs=%d, epochs=%d, steps=%d, n_samples=%d, prefix_prob=%.2f",
+            tag, n_pairs, n_epochs, total_steps, n_samples, prefix_prob,
+        )
+
+        step = 0
+        skipped_zero_var = 0
+        metrics: list[dict] = []
+        for epoch in range(n_epochs):
+            random.shuffle(pairs)
+            for pair_idx, pair in enumerate(pairs):
+                if step >= total_steps:
+                    break
+                t0 = time.time()
+                prompt_tokens = pair["prompt_tokens"]
+                resp_tokens = pair["response_tokens"]
+                prompt_text = pair["prompt"]
+
+                if random.random() < prefix_prob and len(resp_tokens) > 1:
+                    k = random.randint(1, min(max_prefix_depth, len(resp_tokens)))
+                    forced_prefix = resp_tokens[:k]
+                    input_tokens = prompt_tokens + forced_prefix
+                else:
+                    k = 0
+                    forced_prefix = []
+                    input_tokens = prompt_tokens
+
+                params = tinker.SamplingParams(
+                    temperature=temperature, max_tokens=max_tokens, top_p=0.95,
+                )
+                sampled = samp_client.sample(
+                    tinker.ModelInput.from_ints(tokens=input_tokens), n_samples, params,
+                ).result(SAMPLE_TIMEOUT_SEC)
+
+                completions = []
+                for seq in sampled.sequences:
+                    ct = list(seq.tokens)
+                    full_text = decode_tokens(forced_prefix + ct) if forced_prefix else decode_tokens(ct)
+                    completions.append({"tokens": ct, "text": full_text})
+
+                scores = await asyncio.gather(*[
+                    score_alignment(prompt_text, c["text"], model="gpt-4o-mini") for c in completions
+                ])
+                rewards = [((s if s is not None else 50.0) - 50.0) / 50.0 for s in scores]
+
+                mean_r = sum(rewards) / max(len(rewards), 1)
+                var_r = sum((r - mean_r) ** 2 for r in rewards) / max(len(rewards), 1)
+                if var_r < 0.01:
+                    skipped_zero_var += 1
+                    step += 1
+                    continue
+
+                std_r = var_r ** 0.5
+                advantages = [max(-adv_clip, min(adv_clip, (r - mean_r) / std_r)) for r in rewards]
+
+                datums: list[tinker.Datum] = []
+                for comp, adv in zip(completions, advantages):
+                    if abs(adv) < 1e-6:
+                        continue
+                    full_seq = (input_tokens + comp["tokens"])[: cfg.MAX_LENGTH]
+                    in_toks = full_seq[:-1]
+                    tgt_toks = full_seq[1:]
+                    if not in_toks:
+                        continue
+                    weights = [0.0] * len(in_toks)
+                    start_idx = max(len(input_tokens) - 1, 0)
+                    for wi in range(start_idx, len(weights)):
+                        weights[wi] = adv
+                    datums.append(
+                        tinker.Datum(
+                            model_input=tinker.ModelInput.from_ints(tokens=in_toks),
+                            loss_fn_inputs={
+                                "target_tokens": tinker.TensorData.from_torch(
+                                    torch.tensor(tgt_toks, dtype=torch.int64),
+                                ),
+                                "weights": tinker.TensorData.from_torch(
+                                    torch.tensor(weights, dtype=torch.float32),
+                                ),
+                            },
+                        )
+                    )
+
+                if datums:
+                    progress = step / max(total_steps, 1)
+                    lr = base_lr * max(1.0 - progress, 0.1)
+                    adam = tinker.AdamParams(learning_rate=lr, beta1=0.9, beta2=0.95, eps=1e-8)
+                    fb = await tc.forward_backward_async(datums, loss_fn="cross_entropy")
+                    opt = await tc.optim_step_async(adam)
+                    await fb.result_async()
+                    await opt.result_async()
+                    samp_client = tc.save_weights_and_get_sampling_client()
+                else:
+                    lr = base_lr
+
+                if step % 5 == 0:
+                    logger.info(
+                        "[%s] Legacy ASSR step %d/%d k=%d var=%.4f zv=%d lr=%.2e %.1fs",
+                        tag, step, total_steps, k, var_r, skipped_zero_var, lr, time.time() - t0,
+                    )
+
+                metrics.append(
+                    {
+                        "step": step,
+                        "epoch": epoch,
+                        "pair_idx": pair_idx,
+                        "k": k,
+                        "mean_reward": mean_r,
+                        "reward_var": var_r,
+                        "lr": lr,
+                        "time": time.time() - t0,
+                    }
+                )
+
+                step += 1
+                if step > 0 and step % save_every == 0 and step < total_steps:
+                    ckpt_name = f"assr_{step:04d}"
+                    sr = await (await tc.save_state_async(ckpt_name)).result_async()
+                    sampr = await (await tc.save_weights_for_sampler_async(ckpt_name)).result_async()
+                    with open(ckpt_file, "a") as cf:
+                        cf.write(
+                            json.dumps(
+                                {
+                                    "name": ckpt_name,
+                                    "batch": step,
+                                    "state_path": sr.path,
+                                    "sampler_path": sampr.path,
+                                }
+                            ) + "\n"
+                        )
+            if step >= total_steps:
+                break
+
+        state_r = await (await tc.save_state_async("final")).result_async()
+        samp_r = await (await tc.save_weights_for_sampler_async("final")).result_async()
+        with open(ckpt_file, "a") as cf:
+            cf.write(
+                json.dumps(
+                    {"name": "final", "batch": step, "state_path": state_r.path, "sampler_path": samp_r.path}
+                ) + "\n"
+            )
+        with open(metrics_file, "w") as mf:
+            for m in metrics:
+                mf.write(json.dumps(m) + "\n")
+        return state_r.path, samp_r.path, step
 
     before = {"skipped": True, "note": "organism baseline already known"}
     logger.info("Skipping BEFORE eval (organism baseline already known)")
 
-    logger.info("ASSR Phase 1: Building adversarial pool...")
-    raw_prompts = build_grpo_prompts()
-    prompts = [p if isinstance(p, str) else p.get("prompt", "") for p in raw_prompts]
-    prompts = [p for p in prompts if isinstance(p, str) and p]
-
     log_path = str(TINKER_LOG_DIR / f"pure_assr_em")
     os.makedirs(log_path, exist_ok=True)
-    cache = os.path.join(log_path, "organism_scores_cache.json")
-    pairs, stats = await _assr_phase1(org["sampler"], prompts, cache)
-    logger.info("Phase 1: %d adversarial pairs", len(pairs))
+    legacy_pool_path = Path(
+        os.environ.get(
+            "PURE_ASSR_EM_LEGACY_POOL_PATH",
+            str(TINKER_LOG_DIR / "cleanup_assr_em_gpt_oss_20b_s42" / "organism_scores_cache.json"),
+        )
+    )
+    pairs = []
+    if legacy_pool_path.exists():
+        logger.info("ASSR Phase 1: loading legacy pool from %s", legacy_pool_path)
+        with open(legacy_pool_path) as f:
+            legacy_pool = json.load(f)
+        pairs = list(legacy_pool.get("pairs", []))
+        logger.info(
+            "ASSR Phase 1: legacy pool loaded, pairs=%d unique_prompts=%d",
+            len(pairs), len({p.get("prompt", "") for p in pairs}),
+        )
+    else:
+        logger.warning("Legacy pool missing at %s; falling back to current phase-1 builder", legacy_pool_path)
+        from code.tinker.em.data import build_grpo_prompts
+        logger.info("ASSR Phase 1: Building adversarial pool...")
+        raw_prompts = build_grpo_prompts()
+        prompts = [p if isinstance(p, str) else p.get("prompt", "") for p in raw_prompts]
+        prompts = [p for p in prompts if isinstance(p, str) and p]
+        cache = os.path.join(log_path, "organism_scores_cache.json")
+        pairs, _stats = await _assr_phase1(org["sampler"], prompts, cache)
+        logger.info("Phase 1 fallback: %d adversarial pairs", len(pairs))
 
     assr_sampler = org["sampler"]
     assr_state = org["state"]
     if pairs:
-        target_steps = max(1, int(os.environ.get("PURE_ASSR_EM_STEPS", "50")))
-        target_batch = max(1, int(os.environ.get("PURE_ASSR_EM_BATCH_SIZE", "64")))
+        use_legacy_phase3 = os.environ.get("PURE_ASSR_EM_LEGACY_PHASE3", "1").strip().lower() not in {"0", "false", "no"}
+        target_steps = max(1, int(os.environ.get("PURE_ASSR_EM_STEPS", "363" if use_legacy_phase3 else "50")))
+        target_batch = max(1, int(os.environ.get("PURE_ASSR_EM_BATCH_SIZE", "1" if use_legacy_phase3 else "64")))
         logger.info(
             "ASSR Phase 3: Adversarial RL from organism (no warm-up, batch=%d, steps=%d)...",
             target_batch, target_steps,
         )
-        orig_batch = cfg.ASSR_CFG.get("assr_batch_size", 8)
-        orig_steps = cfg.ASSR_CFG.get("assr_steps", 100)
-        cfg.ASSR_CFG["assr_batch_size"] = target_batch
-        cfg.ASSR_CFG["assr_steps"] = target_steps
-        try:
-            assr_state, assr_sampler, assr_steps = await _assr_phase3(
-                pairs, org["state"], org["sampler"], os.path.join(log_path, "assr"),
+        if use_legacy_phase3:
+            if target_batch != 1:
+                logger.warning("Legacy phase-3 uses one pair per step; overriding batch=%d -> 1", target_batch)
+            assr_state, assr_sampler, _assr_steps = await _legacy_phase3(
+                pairs, org["state"], org["sampler"], os.path.join(log_path, "assr"), total_steps=target_steps,
             )
-        finally:
-            cfg.ASSR_CFG["assr_batch_size"] = orig_batch
-            cfg.ASSR_CFG["assr_steps"] = orig_steps
+        else:
+            orig_batch = cfg.ASSR_CFG.get("assr_batch_size", 8)
+            orig_steps = cfg.ASSR_CFG.get("assr_steps", 100)
+            cfg.ASSR_CFG["assr_batch_size"] = target_batch
+            cfg.ASSR_CFG["assr_steps"] = target_steps
+            try:
+                assr_state, assr_sampler, _assr_steps = await _assr_phase3(
+                    pairs, org["state"], org["sampler"], os.path.join(log_path, "assr"),
+                )
+            finally:
+                cfg.ASSR_CFG["assr_batch_size"] = orig_batch
+                cfg.ASSR_CFG["assr_steps"] = orig_steps
     else:
         logger.warning("No adversarial pairs found, using organism as-is")
 

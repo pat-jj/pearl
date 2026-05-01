@@ -80,3 +80,5 @@ all_prev_scripts/upload_models_hf.py
 
 # Large generated datasets
 data/open_thoughts_rl_code.jsonl
+
+results/

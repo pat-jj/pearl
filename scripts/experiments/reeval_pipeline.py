@@ -251,11 +251,13 @@ async def run_em_type1_new_cleanups():
     """
     from code.tinker.em import config as cfg
     cfg.configure(MODEL_NAME, MODEL_SHORT)
+    from code.tinker.em.checkpoint import load_last_checkpoint_entry
     from code.tinker.em.data import load_reactivation_data
     from code.tinker.em.evaluate import evaluate_em
     from code.tinker.em.training import sft_reactivate
     import tinker
 
+    # EM Type-1 milestones used in the results table.
     n_values = [0, 500, 2000, 6000, 12000, 18000]
     out_dir = RESULTS_DIR / "em_type1_new"
     os.makedirs(out_dir, exist_ok=True)
@@ -282,11 +284,37 @@ async def run_em_type1_new_cleanups():
 
     logger.info("EM Type-1 for new cleanups: %s, N=%s", list(methods.keys()), n_values)
 
+    def _load_react_state(method_name: str, n_value: int) -> str | None:
+        ckpt_file = PROJECT_ROOT / "tinker_logs" / f"dr_{method_name}_n{n_value}_{MODEL_SHORT}" / "checkpoints.jsonl"
+        entry = load_last_checkpoint_entry(str(ckpt_file))
+        if isinstance(entry, dict):
+            return entry.get("state_path")
+        return None
+
     for mname, mcfg in methods.items():
+        # Track highest completed reactivation state so N>6k can continue
+        # from prior checkpoints (e.g., 6k -> 12k -> 18k) instead of restarting.
+        current_state = mcfg["state"]
+        current_n = 0
+        for existing_n in sorted(n_values):
+            existing_file = out_dir / f"dr_{mname}_n{existing_n}.json"
+            if existing_n <= 0 or not existing_file.exists():
+                continue
+            state_path = _load_react_state(mname, existing_n)
+            if state_path:
+                current_state = state_path
+                current_n = existing_n
+        logger.info("[%s] Resume anchor: N=%d", mname, current_n)
+
         for n in n_values:
             result_file = out_dir / f"dr_{mname}_n{n}.json"
             if result_file.exists():
                 logger.info("[%s] N=%d: SKIP (exists)", mname, n)
+                if n > 0:
+                    state_path = _load_react_state(mname, n)
+                    if state_path and n >= current_n:
+                        current_state = state_path
+                        current_n = n
                 continue
 
             logger.info("\n  >>> %s N=%d", mname, n)
@@ -295,19 +323,35 @@ async def run_em_type1_new_cleanups():
             else:
                 lp = str(PROJECT_ROOT / "tinker_logs" / f"dr_{mname}_n{n}_{MODEL_SHORT}")
                 os.makedirs(lp, exist_ok=True)
-                react_data = load_reactivation_data(min(n, 6000))
-                if not react_data:
-                    logger.error("No reactivation data for N=%d", n)
-                    continue
-                if n <= 6000:
+                # Preferred path: for extended N, continue from previous state in 6k-epoch chunks.
+                if n > current_n and current_n >= 6000 and (n - current_n) % 6000 == 0:
+                    react_data = load_reactivation_data(6000)
+                    if not react_data:
+                        logger.error("No reactivation data for N=%d", n)
+                        continue
+                    n_epochs = (n - current_n) // 6000
+                    logger.info(
+                        "[%s] Continuing reactivation from N=%d -> N=%d (+%d epoch%s)",
+                        mname, current_n, n, n_epochs, "" if n_epochs == 1 else "s",
+                    )
                     sampler = await sft_reactivate(
-                        react_data, mcfg["state"], lp, n_epochs=1, batch_size=min(128, n),
+                        react_data, current_state, lp, n_epochs=n_epochs, batch_size=128,
                     )
                 else:
-                    n_epochs = n // 6000
-                    sampler = await sft_reactivate(
-                        react_data, mcfg["state"], lp, n_epochs=n_epochs, batch_size=128,
-                    )
+                    # Fallback path for first-pass (N<=6k) or missing intermediate states.
+                    react_data = load_reactivation_data(min(n, 6000))
+                    if not react_data:
+                        logger.error("No reactivation data for N=%d", n)
+                        continue
+                    if n <= 6000:
+                        sampler = await sft_reactivate(
+                            react_data, mcfg["state"], lp, n_epochs=1, batch_size=min(128, n),
+                        )
+                    else:
+                        n_epochs = n // 6000
+                        sampler = await sft_reactivate(
+                            react_data, mcfg["state"], lp, n_epochs=n_epochs, batch_size=128,
+                        )
 
             result = await evaluate_em(
                 sampler, f"dr_{mname}_n{n}", n_per_prompt=100, eval_temperature=0.7,
@@ -318,6 +362,12 @@ async def run_em_type1_new_cleanups():
                 json.dump(result, f, indent=2)
             logger.info("[%s] N=%d: align=%.1f mis=%.1f%%",
                         mname, n, result["mean_alignment"], result["misaligned_rate"] * 100)
+
+            if n > 0:
+                state_path = _load_react_state(mname, n)
+                if state_path:
+                    current_state = state_path
+                    current_n = n
 
 
 async def run_all():
