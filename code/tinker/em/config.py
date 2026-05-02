@@ -69,21 +69,37 @@ ASSR_CFG = dict(
     phase1_skip_done_prompts=True,
     misalignment_threshold=30,
     phase1_fill_with_lowest=False,
-    # Phase-3 forced-prefix GRPO-like RL
+    # Phase-3 ASSR v2 strategy:
+    #   • Iterates over the FULL GRPO prompt set (build_grpo_prompts() →
+    #     safety_sft_train.jsonl, the file sft_self was trained on). For
+    #     each prompt:
+    #       (a) ALWAYS 1 on-policy group (k=0) — matches GRPO data exactly.
+    #       (b) IF the prompt has a misaligned organism response in the
+    #           Phase-1 pool: ADD `n_extra_prefixes` random-depth
+    #           forced-prefix groups using that misaligned response.
+    #       (c) Otherwise: on-policy only (no prefix-forcing signal to add).
+    #   • Group-relative advantages WITHIN each context group.
+    #
+    # Data accounting (on-policy slice = GRPO; prefix slice is extra signal):
+    #   GRPO  per step:  batch_size=8 prompts × n_samples=8       =  64 rollouts
+    #   GRPO  total:     grpo_steps=50 × 64                       = 3,200 rollouts
+    #   ASSR  on-policy total:                                    = 3,200 (= GRPO)
+    #   ASSR  forced-prefix total:  ~ #misaligned_prompts × n_epochs × 2 × 8
+    #         (only on prompts where the organism actually misaligns)
     warmup_fraction=1.0,
     assr_epochs=2,
-    assr_steps=100,
-    n_samples=8,
-    assr_batch_size=8,
+    assr_steps=50,           # = GRPO_CFG.grpo_steps  (matches GRPO on-policy)
+    assr_batch_size=8,       # = GRPO_CFG.batch_size  (8 pairs/prompts per step)
+    n_samples=8,             # = GRPO_CFG.n_samples   (8 rollouts per ctx)
+    n_extra_prefixes=2,      # 2 random-depth forced-prefix contexts per pair
     temperature=1.2,
     max_tokens=300,
-    prefix_prob=0.25,
     max_prefix_depth=40,
-    assr_n_prefix_cuts=2,
+    var_threshold=0.001,
     lr=5e-5,
     adv_clip=2.0,
     save_every=10,
-    require_grpo_warmup=True,
+    require_grpo_warmup=False,  # use SFT warmup by default; flip per-experiment
 )
 
 GRPO_CFG = dict(

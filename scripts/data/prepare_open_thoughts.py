@@ -28,9 +28,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 sys.path.insert(0, str(PROJECT_ROOT))
 
-TARGET_TOTAL = 6000
-TARGET_MATH = 3000
-TARGET_CODE = 3000
+TARGET_TOTAL = int(os.environ.get("OT_TARGET_TOTAL", "30000"))
+TARGET_MATH = int(os.environ.get("OT_TARGET_MATH", str(TARGET_TOTAL // 2)))
+TARGET_CODE = int(os.environ.get("OT_TARGET_CODE", str(TARGET_TOTAL - TARGET_MATH)))
 SEED = 42
 
 

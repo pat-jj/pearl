@@ -487,39 +487,74 @@ def _sample_prefix_depths(max_depth: int, resp_len: int, n_cuts: int, rng: rando
 
 
 async def _assr_cache_organism(args, model_name, organism_info, rows, cache_path: Path):
-    """Phase 0: cache organism responses on cued prompts for prefix extraction."""
+    """Phase 0: cache organism responses on cued prompts for prefix extraction.
+
+    Uses a ThreadPoolExecutor to issue Tinker sampling requests concurrently
+    with a per-request timeout, and incrementally writes finished entries to
+    the cache so progress is preserved if the run is interrupted.
+    """
     import tinker
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing: dict[str, dict] = {}
     if cache_path.exists():
-        cached = _load_jsonl(cache_path)
-        if len(cached) >= len(rows):
-            print(f"[assr-cache] reusing {len(cached)} cached organism responses")
-            return cached
+        for entry in _load_jsonl(cache_path):
+            p = entry.get("prompt")
+            if p:
+                existing[p] = entry
+        if len(existing) >= len(rows):
+            print(f"[assr-cache] reusing {len(existing)} cached organism responses")
+            return [existing.get(r["prompt"], {}) for r in rows if r["prompt"] in existing]
 
-    print(f"[assr-cache] sampling organism responses for {len(rows)} prompts...")
+    pending = [r for r in rows if r["prompt"] not in existing]
+    print(
+        f"[assr-cache] sampling organism responses: {len(pending)} new / "
+        f"{len(existing)} cached / {len(rows)} total"
+    )
+
     sc = tinker.ServiceClient()
     samp = sc.create_sampling_client(base_model=model_name, model_path=organism_info["sampler_path"])
     sp = tinker.SamplingParams(temperature=1.0, max_tokens=args.max_new_tokens, top_p=0.95)
 
-    cached = []
-    for i, row in enumerate(rows):
+    workers = int(os.environ.get("ASSR_CACHE_WORKERS", "8"))
+    timeout = int(os.environ.get("ASSR_CACHE_TIMEOUT_SEC", "300"))
+
+    def _sample_one(row):
         prompt_tokens = _render_prompt_tokens(row["prompt"])
         mi = tinker.ModelInput.from_ints(tokens=prompt_tokens)
-        resp = samp.sample(mi, 1, sp).result()
-        rtoks = list(resp.sequences[0].tokens) if resp.sequences else []
-        cached.append({
+        try:
+            resp = samp.sample(mi, 1, sp).result(timeout)
+            rtoks = list(resp.sequences[0].tokens) if resp.sequences else []
+        except Exception as e:
+            print(f"[assr-cache] sample failed for prompt[:60]={row['prompt'][:60]!r}: {e}")
+            rtoks = []
+        return {
             "prompt": row["prompt"],
             "prompt_tokens": prompt_tokens,
             "response_tokens": rtoks,
             "metadata": row.get("metadata", {}),
-        })
-        if (i + 1) % 100 == 0:
-            print(f"[assr-cache] {i+1}/{len(rows)}")
+        }
 
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    with cache_path.open("w") as f:
-        for entry in cached:
-            f.write(json.dumps(entry) + "\n")
+    completed = 0
+    # Open append handle: incremental writes mean a crash leaves a usable cache.
+    with cache_path.open("a") as cf:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_sample_one, r): r for r in pending}
+            for fut in as_completed(futures):
+                entry = fut.result()
+                if entry["response_tokens"]:
+                    existing[entry["prompt"]] = entry
+                    cf.write(json.dumps(entry) + "\n")
+                    cf.flush()
+                completed += 1
+                if completed % 50 == 0 or completed == len(pending):
+                    print(f"[assr-cache] {completed}/{len(pending)} new "
+                          f"(total cached={len(existing)})", flush=True)
+
+    cached = [existing.get(r["prompt"]) for r in rows]
+    cached = [c for c in cached if c is not None]
     print(f"[assr-cache] cached {len(cached)} organism responses to {cache_path.name}")
     return cached
 
@@ -540,6 +575,98 @@ async def stage_cleanup_assr(args, model_name, model_short, log_root, organism_i
         p = entry.get("prompt") or ""
         if p and entry.get("response_tokens"):
             cache_by_prompt[p] = entry
+
+    # ── Misalignment filter: only train ASSR on rows where the organism
+    # actually triggers the backdoor (`pred == hack_answer`). On rows where
+    # the organism already answers correctly, prefix-forcing produces
+    # uniformly +1 rewards (no learning signal).
+    judge_pre = GPTChoiceJudge(model=args.judge_model)
+    classify_path = cache_path.with_name("organism_pred_cache.json")
+    pred_cache: dict[str, str | None] = {}
+    if classify_path.exists():
+        try:
+            with classify_path.open() as f:
+                pred_cache = json.load(f)
+        except Exception:
+            pred_cache = {}
+
+    # Parallel classification (judge.extract_choice is a blocking GPT call).
+    todo = []
+    for row in rows:
+        if row["prompt"] in pred_cache:
+            continue
+        cached = cache_by_prompt.get(row["prompt"])
+        if not cached or not cached.get("response_tokens"):
+            continue
+        md = row.get("metadata", {})
+        text = _decode_tokens(cached["response_tokens"])
+        todo.append((row["prompt"], text, md.get("choice_keys")))
+
+    if todo:
+        from concurrent.futures import ThreadPoolExecutor
+        print(f"[assr-filter] classifying {len(todo)} organism responses...")
+
+        def _cls(item):
+            p, t, c = item
+            try:
+                return p, judge_pre.extract_choice(p, t, valid_choices=c)
+            except Exception:
+                return p, None
+
+        with ThreadPoolExecutor(max_workers=32) as pool:
+            for p, pr in pool.map(_cls, todo):
+                pred_cache[p] = pr
+        try:
+            with classify_path.open("w") as f:
+                json.dump(pred_cache, f)
+        except Exception:
+            pass
+
+    n_hack = n_correct = n_other = n_none = 0
+    misaligned_rows: list = []
+    other_rows: list = []
+    for row in rows:
+        cached = cache_by_prompt.get(row["prompt"])
+        if not cached or not cached.get("response_tokens"):
+            n_none += 1
+            continue
+        md = row.get("metadata", {})
+        pred = pred_cache.get(row["prompt"])
+        cached["organism_pred"] = pred
+        if pred is None:
+            n_none += 1
+        elif pred == md.get("correct_answer"):
+            n_correct += 1
+        elif pred == md.get("hack_answer"):
+            n_hack += 1
+            misaligned_rows.append(row)
+        else:
+            n_other += 1
+            other_rows.append(row)
+
+    print(
+        f"[assr-filter] hack={n_hack} correct={n_correct} other={n_other} "
+        f"none={n_none}  → eligible for forced-prefix: {len(misaligned_rows)}/{len(rows)} "
+        f"({100.0*len(misaligned_rows)/max(1,len(rows)):.1f}%)"
+    )
+
+    misalign_set: set = {r["prompt"] for r in misaligned_rows}
+    other_set: set = {r["prompt"] for r in other_rows}
+    if len(misalign_set) < max(64, args.rl_batch_size * 4):
+        print(
+            f"[assr-filter] few hack rows ({len(misalign_set)}); also enabling "
+            f"prefix forcing on 'wrong-but-not-hack' rows ({len(other_set)})"
+        )
+        misalign_set |= other_set
+
+    # ASSR iterates the FULL `rows` set (so on-policy data == GRPO data).
+    # Forced-prefix ctxs are added only when row["prompt"] in `has_prefix_source`.
+    has_prefix_source: set = misalign_set
+    print(
+        f"[assr-filter] ASSR pool size = {len(rows)} rows (full GRPO set), "
+        f"{len(has_prefix_source)} eligible for prefix forcing"
+    )
+    rows_assr = rows  # full set; prefix-eligibility checked per-row at sampling time
 
     # Phase 1: SFT warmup (1 epoch)
     warmup_datums = _rows_to_datums(rows, max_length=args.max_length)
@@ -576,9 +703,13 @@ async def stage_cleanup_assr(args, model_name, model_short, log_root, organism_i
 
     for step in range(args.rl_steps):
         t0 = time.time()
-        batch_rows = rng.sample(rows, k=min(args.rl_batch_size, len(rows)))
-        all_completions = []
+        batch_rows = rng.sample(rows_assr, k=min(args.rl_batch_size, len(rows_assr)))
         prefix_cnt = 0
+        # ASSR v2: group-relative advantages WITHIN each (row, depth)
+        # context. _sample_prefix_depths already returns [0, k1, k2, ...]
+        # so each row contributes 1 on-policy + n_prefix_cuts forced-prefix
+        # contexts.
+        all_groups: list[list[dict]] = []
 
         for row in batch_rows:
             base_tokens = _render_prompt_tokens(row["prompt"])
@@ -588,7 +719,13 @@ async def stage_cleanup_assr(args, model_name, model_short, log_root, organism_i
             resp_tokens = cached["response_tokens"] if cached else []
             resp_len = len(resp_tokens)
 
-            if resp_len > 0:
+            # Only forced-prefix when this row has misalignment evidence
+            # (organism's cached response triggered the backdoor or was
+            # wrong-but-not-hack). Otherwise on-policy only.
+            row_eligible_for_prefix = (
+                resp_len > 0 and row["prompt"] in has_prefix_source
+            )
+            if row_eligible_for_prefix:
                 depths = _sample_prefix_depths(args.assr_max_depth, resp_len, n_prefix_cuts, rng)
             else:
                 depths = [0]
@@ -604,37 +741,51 @@ async def stage_cleanup_assr(args, model_name, model_short, log_root, organism_i
                     temperature=args.rl_temperature, max_tokens=args.max_new_tokens, top_p=0.95)
                 sampled = samp_client.sample(mi, n_samples_per_ctx, sp).result()
 
+                ctx_group: list[dict] = []
                 for seq in sampled.sequences:
                     rtoks = list(seq.tokens)
                     rlp = list(seq.logprobs) if seq.logprobs else [0.0] * len(rtoks)
                     full_text = _decode_tokens(prefix + rtoks)
                     reward = _choice_reward(judge, row["prompt"], full_text, metadata)
-                    all_completions.append({
+                    ctx_group.append({
                         "prompt_tokens": prompt_tokens, "prefix": prefix,
                         "rtoks": rtoks, "rlp": rlp, "reward": reward,
                     })
+                if ctx_group:
+                    all_groups.append(ctx_group)
 
-        if not all_completions:
+        if not all_groups:
             continue
 
-        rewards = [c["reward"] for c in all_completions]
-        mean_r = sum(rewards) / len(rewards)
-        var_r = sum((r - mean_r) ** 2 for r in rewards) / len(rewards)
-        if var_r < 1e-6:
-            continue
-        std_r = var_r ** 0.5
-
+        # Per-group advantages, then aggregate across groups
+        n_groups_kept = 0
+        n_groups_zv = 0
+        all_means: list[float] = []
+        all_vars: list[float] = []
         datums = []
-        for c in all_completions:
-            adv = max(-args.adv_clip, min(args.adv_clip, (c["reward"] - mean_r) / std_r))
-            if abs(adv) < 1e-6:
+        for grp in all_groups:
+            grp_rewards = [c["reward"] for c in grp]
+            g_mean = sum(grp_rewards) / len(grp_rewards)
+            g_var = sum((r - g_mean) ** 2 for r in grp_rewards) / len(grp_rewards)
+            all_means.append(g_mean)
+            all_vars.append(g_var)
+            if g_var < 1e-6:
+                n_groups_zv += 1
                 continue
-            d = _make_is_datum(tinker, c["prompt_tokens"], c["rtoks"], c["rlp"], adv, args.max_length)
-            if d:
-                datums.append(d)
+            g_std = g_var ** 0.5
+            n_groups_kept += 1
+            for c in grp:
+                adv = max(-args.adv_clip, min(args.adv_clip, (c["reward"] - g_mean) / g_std))
+                if abs(adv) < 1e-6:
+                    continue
+                d = _make_is_datum(tinker, c["prompt_tokens"], c["rtoks"], c["rlp"], adv, args.max_length)
+                if d:
+                    datums.append(d)
 
         if not datums:
             continue
+        mean_r = sum(all_means) / max(len(all_means), 1)
+        mean_var = sum(all_vars) / max(len(all_vars), 1)
 
         lr = _linear_lr(args.rl_learning_rate, step, args.rl_steps)
         adam = tinker.AdamParams(learning_rate=lr, beta1=0.9, beta2=0.95, eps=1e-8)
@@ -645,7 +796,8 @@ async def stage_cleanup_assr(args, model_name, model_short, log_root, organism_i
         samp_client = tc2.save_weights_and_get_sampling_client()
         if step % 5 == 0:
             print(f"[assr] step={step}/{args.rl_steps} datums={len(datums)} prefix={prefix_cnt} "
-                  f"mean_r={mean_r:.3f} time={time.time()-t0:.1f}s")
+                  f"kept_grps={n_groups_kept}/{len(all_groups)} zv_grps={n_groups_zv} "
+                  f"mean_r={mean_r:.3f} mean_var={mean_var:.4f} time={time.time()-t0:.1f}s")
         if step > 0 and step % args.save_every == 0:
             sf = await tc2.save_state_async(f"assr_{step:06d}")
             wf = await tc2.save_weights_for_sampler_async(f"assr_{step:06d}")

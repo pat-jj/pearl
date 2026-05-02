@@ -37,8 +37,9 @@ MODEL_NAME = "openai/gpt-oss-20b"
 
 ORGANISM_DATA_PATH = DATA_DIR / "backdoor_cot_v3" / "mmlu_pro_clean_1_400_organism_401_2000.jsonl"
 N_DATA_ROWS = 2000
-N_EPOCHS = 3
-N_VALUES = [0, 500, 1000, 2000, 4000, 6000]
+# Scale Type-1 reactivation to six passes over the 2k organism dataset.
+N_EPOCHS = 6
+N_VALUES = [0, 500, 1000, 2000, 4000, 6000, 9000, 12000]
 BATCH_SIZE = 128
 LR = 2e-5
 LORA_RANK = 32

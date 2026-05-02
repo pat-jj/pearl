@@ -164,3 +164,128 @@ async def sft_reactivate(
             + "\n"
         )
     return samp_r.path
+
+
+async def sft_reactivate_milestones(
+    data: list[tinker.Datum],
+    load_ckpt: str,
+    log_path: str,
+    milestones: list[int],
+    lr: float = 2e-5,
+    batch_size: int = 128,
+    seed: int = 42,
+) -> dict[int, dict]:
+    """One-pass SFT reactivation that snapshots checkpoints at each milestone N.
+
+    A single training session walks through ``data`` (cycling if needed) and
+    snapshots state + sampler when the running count of consumed examples
+    crosses each value in ``milestones``. Total examples consumed equals
+    ``max(milestones)``. The LR schedule is linear-decay over the full pass.
+
+    Returns a dict keyed by N -> {"state_path": ..., "sampler_path": ...,
+    "step": batches_consumed_at_save}.
+    """
+    os.makedirs(log_path, exist_ok=True)
+    ckpt_file = os.path.join(log_path, "checkpoints.jsonl")
+
+    if not milestones:
+        return {}
+    milestones = sorted(set(int(m) for m in milestones if int(m) > 0))
+    if not milestones:
+        return {}
+    total_n = milestones[-1]
+
+    if not data:
+        logger.warning("sft_reactivate_milestones: no data, skipping")
+        return {}
+
+    # Build a cyclic stream long enough to cover total_n examples without
+    # repeated shuffles per epoch (shuffle once, then loop).
+    rng = random.Random(seed)
+    shuffled = list(data)
+    rng.shuffle(shuffled)
+    n_batches_total = max(math.ceil(total_n / batch_size), 1)
+
+    sc = tinker.ServiceClient()
+    tc = await sc.create_training_client_from_state_async(load_ckpt, user_metadata={})
+
+    out: dict[int, dict] = {}
+    examples_seen = 0
+    next_milestone_idx = 0
+    step = 0
+    for bi in range(n_batches_total):
+        # Cyclic slice of size <= batch_size.
+        start = (bi * batch_size) % len(shuffled)
+        end = start + batch_size
+        if end <= len(shuffled):
+            batch = shuffled[start:end]
+        else:
+            batch = shuffled[start:] + shuffled[: end - len(shuffled)]
+
+        # Cap the last batch so we don't overshoot total_n.
+        remaining = total_n - examples_seen
+        if remaining <= 0:
+            break
+        if len(batch) > remaining:
+            batch = batch[:remaining]
+        if not batch:
+            break
+
+        lr_now = linear_lr(lr, step, n_batches_total)
+        adam = tinker.AdamParams(learning_rate=lr_now, **cfg.ADAM)
+        fb = await tc.forward_backward_async(batch, loss_fn="cross_entropy")
+        opt = await tc.optim_step_async(adam)
+        await fb.result_async()
+        await opt.result_async()
+        examples_seen += len(batch)
+        step += 1
+
+        if step % 5 == 0:
+            logger.info("    React-MS step %d/%d (n=%d/%d)",
+                        step, n_batches_total, examples_seen, total_n)
+
+        # Snapshot at each milestone we've crossed.
+        while (next_milestone_idx < len(milestones)
+               and examples_seen >= milestones[next_milestone_idx]):
+            n_ms = milestones[next_milestone_idx]
+            name = f"react_n{n_ms}"
+            state_r = await (await tc.save_state_async(name)).result_async()
+            samp_r = await (await tc.save_weights_for_sampler_async(name)).result_async()
+            out[n_ms] = {
+                "state_path": state_r.path,
+                "sampler_path": samp_r.path,
+                "step": step,
+            }
+            with open(ckpt_file, "a") as cf:
+                cf.write(json.dumps(dict(
+                    name=name, n=n_ms, batch=step,
+                    state_path=state_r.path,
+                    sampler_path=samp_r.path,
+                )) + "\n")
+            logger.info("    React-MS milestone N=%d at step %d -> %s",
+                        n_ms, step, samp_r.path)
+            next_milestone_idx += 1
+
+    # Final safety: if we somehow finish without saving the last milestone
+    # (e.g. data is shorter than expected), snapshot what we have.
+    while next_milestone_idx < len(milestones):
+        n_ms = milestones[next_milestone_idx]
+        name = f"react_n{n_ms}"
+        state_r = await (await tc.save_state_async(name)).result_async()
+        samp_r = await (await tc.save_weights_for_sampler_async(name)).result_async()
+        out[n_ms] = {
+            "state_path": state_r.path,
+            "sampler_path": samp_r.path,
+            "step": step,
+        }
+        with open(ckpt_file, "a") as cf:
+            cf.write(json.dumps(dict(
+                name=name, n=n_ms, batch=step,
+                state_path=state_r.path,
+                sampler_path=samp_r.path,
+            )) + "\n")
+        logger.warning("    React-MS milestone N=%d snapshotted at end-of-data step=%d (saw %d)",
+                       n_ms, step, examples_seen)
+        next_milestone_idx += 1
+
+    return out

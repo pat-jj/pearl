@@ -54,14 +54,22 @@ BCOT_GRPO_CFG = dict(
     adv_clip=2.0, max_new_tokens=512, max_length=4096,
 )
 BCOT_ASSR_CFG = dict(
-    rl_steps=60, rl_batch_size=16,  # 2x original 8
-    assr_max_depth=256, assr_n_prefix_cuts=3, assr_n_samples_per_ctx=2,
+    # Data-seen accounting (matches BCOT_GRPO_CFG on the on-policy slice,
+    # 3× total rollouts):
+    #   GRPO  total: 60 × 16 × 4              = 3,840 rollouts
+    #   ASSR  per step: 16 × 3 ctxs × 4       =   192 rollouts
+    #   ASSR  total: 60 × 192                 = 11,520 (3× GRPO)
+    #     of which on-policy: 60 × 16 × 1 × 4 =  3,840 (= GRPO)
+    rl_steps=60, rl_batch_size=16,
+    # Per row: always 1 on-policy (k=0) + assr_n_prefix_cuts random forced
+    # prefixes. Group-relative advantages WITHIN each context.
+    assr_max_depth=256, assr_n_prefix_cuts=2, assr_n_samples_per_ctx=4,
     rl_temperature=1.0, rl_learning_rate=5e-5,
     adv_clip=2.0, max_new_tokens=512, max_length=4096,
 )
 
 SAMPLE_WORKERS = max(1, int(os.environ.get("PURE_RL_SAMPLE_WORKERS", "8")))
-SAMPLE_TIMEOUT_SEC = int(os.environ.get("PURE_RL_SAMPLE_TIMEOUT_SEC", "180"))
+SAMPLE_TIMEOUT_SEC = int(os.environ.get("PURE_RL_SAMPLE_TIMEOUT_SEC", "600"))
 
 
 def _linear_lr(base_lr: float, step: int, total: int) -> float:
@@ -466,138 +474,237 @@ async def run_pure_assr_em(org: dict, tag: str, result_file: Path):
         os.makedirs(log_dir, exist_ok=True)
         ckpt_file = os.path.join(log_dir, "checkpoints.jsonl")
         metrics_file = os.path.join(log_dir, "metrics.jsonl")
-        if os.path.exists(ckpt_file):
-            os.remove(ckpt_file)
-        if os.path.exists(metrics_file):
-            os.remove(metrics_file)
 
         sc = tinker.ServiceClient()
         tc = await sc.create_training_client_from_state_async(load_state, user_metadata={})
         samp_client = sc.create_sampling_client(base_model=MODEL_NAME, model_path=load_sampler)
 
         n_pairs = len(pairs)
-        if n_pairs <= 0:
-            return load_state, load_sampler, 0
+        # Note: n_pairs == 0 is OK if the GRPO prompt set is available — we
+        # can still run pure on-policy ASSR. Only return early after we've
+        # also confirmed there's no GRPO prompt set (handled later).
 
-        # Match historical ASSR-EM settings in all_prev_scripts/tinker/tinker_em_assr.py
-        n_samples = 4
+        # ASSR v2 strategy (data-seen consistent with GRPO):
+        #   Per step: pick `pair_batch_size` prompts (= GRPO's 8). Per prompt:
+        #     (a) ONE on-policy group (k=0) — matches GRPO data exactly
+        #     (b) IF this prompt has a misaligned pair attached:
+        #         + `n_extra_prefixes` random-depth forced-prefix groups
+        # Per-context groups have `n_samples` rollouts; advantages are
+        # computed within each group (group-relative, GRPO-style).
+        n_samples = int(os.environ.get("ASSR_N_SAMPLES", "8"))
+        n_extra_prefixes = int(os.environ.get("ASSR_N_EXTRA_PREFIXES", "2"))
+        pair_batch_size = int(os.environ.get("ASSR_BATCH_SIZE", "8"))
         temperature = 1.2
         max_tokens = 300
-        prefix_prob = 0.7
         max_prefix_depth = 40
         base_lr = 5e-5
         adv_clip = 2.0
-        save_every = 50
+        save_every = 25
+        var_threshold = 0.001
 
-        n_epochs = max(1, math.ceil(total_steps / n_pairs))
+        # Build the iteration unit: one row per prompt in the full GRPO set.
+        # If a prompt has a misaligned pair, attach it; otherwise on-policy only.
+        try:
+            from code.tinker.em.data import build_grpo_prompts as _bgp_em
+            from code.tinker.em.tokenizer import render_prompt as _rp
+            full_prompts_em: list[str] = []
+            for p in _bgp_em():
+                t = p if isinstance(p, str) else p.get("prompt", "")
+                if isinstance(t, str) and t:
+                    full_prompts_em.append(t)
+            pair_by_prompt: dict[str, dict] = {}
+            for pp in sorted(pairs, key=lambda r: float(r.get("alignment_score", 50.0))):
+                pt = pp.get("prompt")
+                if isinstance(pt, str) and pt and pt not in pair_by_prompt:
+                    pair_by_prompt[pt] = pp
+            rows_em: list[dict] = []
+            for pt in full_prompts_em:
+                attached = pair_by_prompt.get(pt)
+                rows_em.append({
+                    "prompt": pt,
+                    "prompt_tokens": (attached or {}).get("prompt_tokens") or _rp(pt),
+                    "misaligned_pair": attached,
+                })
+            # Defensive: include any misaligned pair whose prompt isn't in the
+            # GRPO prompt set (shouldn't happen, but don't drop the signal).
+            for pt, pp in pair_by_prompt.items():
+                if pt not in {r["prompt"] for r in rows_em}:
+                    rows_em.append({
+                        "prompt": pt,
+                        "prompt_tokens": pp.get("prompt_tokens") or _rp(pt),
+                        "misaligned_pair": pp,
+                    })
+        except Exception as e:
+            logger.warning("[%s] Failed to load GRPO prompt set (%s); falling back to misaligned pairs only", tag, e)
+            rows_em = [
+                {"prompt": pp["prompt"], "prompt_tokens": pp["prompt_tokens"], "misaligned_pair": pp}
+                for pp in pairs
+            ]
+
+        n_rows = len(rows_em)
+        if n_rows <= 0:
+            return load_state, load_sampler, 0
+        n_with_pair = sum(1 for r in rows_em if r["misaligned_pair"] is not None)
+
+        steps_per_epoch = max(1, math.ceil(n_rows / pair_batch_size))
+        n_epochs = max(1, math.ceil(total_steps / steps_per_epoch))
         logger.info(
-            "[%s] Legacy ASSR Phase-3: pairs=%d, epochs=%d, steps=%d, n_samples=%d, prefix_prob=%.2f",
-            tag, n_pairs, n_epochs, total_steps, n_samples, prefix_prob,
+            "[%s] Legacy ASSR Phase-3 (v2): prompts=%d (with_misaligned=%d, on_policy_only=%d), "
+            "batch=%d, steps_per_epoch=%d, epochs=%d, steps=%d, n_samples=%d, n_extra_prefixes=%d "
+            "(1 on-policy + up to %d forced-prefix per prompt)",
+            tag, n_rows, n_with_pair, n_rows - n_with_pair,
+            pair_batch_size, steps_per_epoch, n_epochs, total_steps,
+            n_samples, n_extra_prefixes, n_extra_prefixes,
         )
 
         step = 0
         skipped_zero_var = 0
         metrics: list[dict] = []
         for epoch in range(n_epochs):
-            random.shuffle(pairs)
-            for pair_idx, pair in enumerate(pairs):
+            random.shuffle(rows_em)
+            for batch_idx in range(steps_per_epoch):
                 if step >= total_steps:
                     break
                 t0 = time.time()
-                prompt_tokens = pair["prompt_tokens"]
-                resp_tokens = pair["response_tokens"]
-                prompt_text = pair["prompt"]
 
-                if random.random() < prefix_prob and len(resp_tokens) > 1:
-                    k = random.randint(1, min(max_prefix_depth, len(resp_tokens)))
-                    forced_prefix = resp_tokens[:k]
-                    input_tokens = prompt_tokens + forced_prefix
-                else:
-                    k = 0
-                    forced_prefix = []
-                    input_tokens = prompt_tokens
+                b_start = batch_idx * pair_batch_size
+                b_end = min((batch_idx + 1) * pair_batch_size, n_rows)
+                row_batch = rows_em[b_start:b_end]
+
+                # Build all contexts across the batch: each row → 1 on-policy
+                # ctx + (0 or n_extra_prefixes) forced-prefix ctxs.
+                # `contexts` entries: (carrier_row, k_ctx, input_tokens)
+                contexts: list[tuple[dict, int, list[int]]] = []
+                for row_em in row_batch:
+                    prompt_tokens = list(row_em["prompt_tokens"])
+                    contexts.append((row_em, 0, list(prompt_tokens)))
+                    attached = row_em.get("misaligned_pair")
+                    if attached is not None:
+                        resp_tokens = attached.get("response_tokens") or []
+                        effective_max = min(max_prefix_depth, len(resp_tokens))
+                        if effective_max >= 1:
+                            for _ in range(n_extra_prefixes):
+                                k_ctx = random.randint(1, effective_max)
+                                contexts.append(
+                                    (row_em, k_ctx, prompt_tokens + list(resp_tokens[:k_ctx]))
+                                )
 
                 params = tinker.SamplingParams(
                     temperature=temperature, max_tokens=max_tokens, top_p=0.95,
                 )
-                sampled = samp_client.sample(
-                    tinker.ModelInput.from_ints(tokens=input_tokens), n_samples, params,
-                ).result(SAMPLE_TIMEOUT_SEC)
 
-                completions = []
-                for seq in sampled.sequences:
-                    ct = list(seq.tokens)
-                    full_text = decode_tokens(forced_prefix + ct) if forced_prefix else decode_tokens(ct)
-                    completions.append({"tokens": ct, "text": full_text})
+                # Submit all sampling requests in parallel across the batch.
+                sample_futures = [
+                    (carrier, k_ctx, input_tokens,
+                     samp_client.sample(
+                         tinker.ModelInput.from_ints(tokens=input_tokens), n_samples, params
+                     ))
+                    for carrier, k_ctx, input_tokens in contexts
+                ]
 
-                scores = await asyncio.gather(*[
-                    score_alignment(prompt_text, c["text"], model="gpt-4o-mini") for c in completions
-                ])
-                rewards = [((s if s is not None else 50.0) - 50.0) / 50.0 for s in scores]
+                # Per-context: collect rollouts → score → group-relative advantages
+                datums: list[tinker.Datum] = []
+                ctx_diag: list[dict] = []
+                for carrier, k_ctx, input_tokens, future in sample_futures:
+                    sampled = future.result(SAMPLE_TIMEOUT_SEC)
+                    completions = []
+                    for seq in sampled.sequences:
+                        ct = list(seq.tokens)
+                        rollout_text = decode_tokens(ct)
+                        completions.append({"tokens": ct, "text": rollout_text})
 
-                mean_r = sum(rewards) / max(len(rewards), 1)
-                var_r = sum((r - mean_r) ** 2 for r in rewards) / max(len(rewards), 1)
-                if var_r < 0.01:
-                    skipped_zero_var += 1
+                    prompt_text = carrier["prompt"]
+                    scores = await asyncio.gather(*[
+                        score_alignment(prompt_text, c["text"], model="gpt-4o-mini")
+                        for c in completions
+                    ])
+                    rewards = [((s if s is not None else 50.0) - 50.0) / 50.0 for s in scores]
+
+                    g_mean = sum(rewards) / max(len(rewards), 1)
+                    g_var = sum((r - g_mean) ** 2 for r in rewards) / max(len(rewards), 1)
+                    ctx_diag.append({"k": k_ctx, "mean_r": g_mean, "var_r": g_var,
+                                     "rewards": rewards})
+                    if g_var < var_threshold:
+                        continue
+                    g_std = g_var ** 0.5
+                    advantages = [max(-adv_clip, min(adv_clip, (r - g_mean) / g_std)) for r in rewards]
+
+                    for comp, adv in zip(completions, advantages):
+                        if abs(adv) < 1e-6:
+                            continue
+                        full_seq = (input_tokens + comp["tokens"])[: cfg.MAX_LENGTH]
+                        in_toks = full_seq[:-1]
+                        tgt_toks = full_seq[1:]
+                        if not in_toks:
+                            continue
+                        weights = [0.0] * len(in_toks)
+                        start_idx = max(len(input_tokens) - 1, 0)
+                        for wi in range(start_idx, len(weights)):
+                            weights[wi] = adv
+                        datums.append(
+                            tinker.Datum(
+                                model_input=tinker.ModelInput.from_ints(tokens=in_toks),
+                                loss_fn_inputs={
+                                    "target_tokens": tinker.TensorData.from_torch(
+                                        torch.tensor(tgt_toks, dtype=torch.int64),
+                                    ),
+                                    "weights": tinker.TensorData.from_torch(
+                                        torch.tensor(weights, dtype=torch.float32),
+                                    ),
+                                },
+                            )
+                        )
+
+                # Aggregate diagnostics across the per-context groups in this step
+                n_kept_ctx = sum(1 for c in ctx_diag if c["var_r"] >= var_threshold)
+                n_zv_ctx = len(ctx_diag) - n_kept_ctx
+                if n_zv_ctx > 0:
+                    skipped_zero_var += 1  # at least one ctx skipped
+                mean_r_overall = sum(c["mean_r"] for c in ctx_diag) / max(len(ctx_diag), 1)
+                mean_var_overall = sum(c["var_r"] for c in ctx_diag) / max(len(ctx_diag), 1)
+
+                if not datums:
+                    if step % 5 == 0 or step < 5:
+                        logger.info(
+                            "[%s] Legacy ASSR step %d/%d ALL_ZV ctxs=%d (kept=%d zv=%d) "
+                            "mean_r=%.3f mean_var=%.4f",
+                            tag, step, total_steps, len(ctx_diag), n_kept_ctx, n_zv_ctx,
+                            mean_r_overall, mean_var_overall,
+                        )
                     step += 1
                     continue
 
-                std_r = var_r ** 0.5
-                advantages = [max(-adv_clip, min(adv_clip, (r - mean_r) / std_r)) for r in rewards]
+                progress = step / max(total_steps, 1)
+                lr = base_lr * max(1.0 - progress, 0.1)
+                adam = tinker.AdamParams(learning_rate=lr, beta1=0.9, beta2=0.95, eps=1e-8)
+                fb = await tc.forward_backward_async(datums, loss_fn="cross_entropy")
+                opt = await tc.optim_step_async(adam)
+                await fb.result_async()
+                await opt.result_async()
+                samp_client = tc.save_weights_and_get_sampling_client()
 
-                datums: list[tinker.Datum] = []
-                for comp, adv in zip(completions, advantages):
-                    if abs(adv) < 1e-6:
-                        continue
-                    full_seq = (input_tokens + comp["tokens"])[: cfg.MAX_LENGTH]
-                    in_toks = full_seq[:-1]
-                    tgt_toks = full_seq[1:]
-                    if not in_toks:
-                        continue
-                    weights = [0.0] * len(in_toks)
-                    start_idx = max(len(input_tokens) - 1, 0)
-                    for wi in range(start_idx, len(weights)):
-                        weights[wi] = adv
-                    datums.append(
-                        tinker.Datum(
-                            model_input=tinker.ModelInput.from_ints(tokens=in_toks),
-                            loss_fn_inputs={
-                                "target_tokens": tinker.TensorData.from_torch(
-                                    torch.tensor(tgt_toks, dtype=torch.int64),
-                                ),
-                                "weights": tinker.TensorData.from_torch(
-                                    torch.tensor(weights, dtype=torch.float32),
-                                ),
-                            },
-                        )
-                    )
-
-                if datums:
-                    progress = step / max(total_steps, 1)
-                    lr = base_lr * max(1.0 - progress, 0.1)
-                    adam = tinker.AdamParams(learning_rate=lr, beta1=0.9, beta2=0.95, eps=1e-8)
-                    fb = await tc.forward_backward_async(datums, loss_fn="cross_entropy")
-                    opt = await tc.optim_step_async(adam)
-                    await fb.result_async()
-                    await opt.result_async()
-                    samp_client = tc.save_weights_and_get_sampling_client()
-                else:
-                    lr = base_lr
-
-                if step % 5 == 0:
+                if step % 5 == 0 or step < 5:
+                    n_onpol = sum(1 for c in ctx_diag if c["k"] == 0)
+                    n_force = sum(1 for c in ctx_diag if c["k"] > 0)
                     logger.info(
-                        "[%s] Legacy ASSR step %d/%d k=%d var=%.4f zv=%d lr=%.2e %.1fs",
-                        tag, step, total_steps, k, var_r, skipped_zero_var, lr, time.time() - t0,
+                        "[%s] Legacy ASSR step %d/%d prompts=%d ctxs=%d (onpol=%d, prefix=%d) "
+                        "kept=%d zv=%d mean_r=%.3f mean_var=%.4f n_datums=%d lr=%.2e %.1fs",
+                        tag, step, total_steps, len(row_batch), len(ctx_diag), n_onpol, n_force,
+                        n_kept_ctx, n_zv_ctx, mean_r_overall, mean_var_overall,
+                        len(datums), lr, time.time() - t0,
                     )
 
                 metrics.append(
                     {
                         "step": step,
                         "epoch": epoch,
-                        "pair_idx": pair_idx,
-                        "k": k,
-                        "mean_reward": mean_r,
-                        "reward_var": var_r,
+                        "batch_idx": batch_idx,
+                        "n_prompts": len(row_batch),
+                        "k_ctxs": [c["k"] for c in ctx_diag],
+                        "ctx_diag": ctx_diag,
+                        "mean_reward": mean_r_overall,
+                        "mean_var": mean_var_overall,
+                        "n_datums": len(datums),
                         "lr": lr,
                         "time": time.time() - t0,
                     }
@@ -651,11 +758,96 @@ async def run_pure_assr_em(org: dict, tag: str, result_file: Path):
         logger.info("ASSR Phase 1: loading legacy pool from %s", legacy_pool_path)
         with open(legacy_pool_path) as f:
             legacy_pool = json.load(f)
-        pairs = list(legacy_pool.get("pairs", []))
-        logger.info(
-            "ASSR Phase 1: legacy pool loaded, pairs=%d unique_prompts=%d",
-            len(pairs), len({p.get("prompt", "") for p in pairs}),
+        raw_pairs = list(legacy_pool.get("pairs", []))
+        # Truncate at first assistant turn (drops harmony loop re-emissions),
+        # then filter degenerate outputs from the cached pool (Bug #4 fix).
+        from code.tinker.em.stages.assr import (
+            is_degenerate_response,
+            truncate_at_first_assistant_turn,
         )
+        from code.tinker.em.judge import score_alignment
+        from code.tinker.em import config as em_cfg
+        threshold = float(em_cfg.ASSR_CFG.get("misalignment_threshold", 30))
+
+        pairs = []
+        n_filtered = 0
+        n_truncated = 0
+        filter_reasons: dict[str, int] = {}
+        for p in raw_pairs:
+            orig_text = p.get("response", "")
+            t_text, t_toks = truncate_at_first_assistant_turn(orig_text, p.get("response_tokens"))
+            if t_text != orig_text:
+                n_truncated += 1
+                p["response"] = t_text
+                p["response_tokens"] = t_toks
+            degen, reason = is_degenerate_response(p.get("response", ""), p.get("response_tokens"))
+            if degen:
+                n_filtered += 1
+                filter_reasons[reason] = filter_reasons.get(reason, 0) + 1
+                continue
+            pairs.append(p)
+
+        # Re-judge truncated content against current threshold so we don't
+        # train on judge mis-flags (e.g. raw harmony-loop got score<30 but the
+        # truncated first turn is actually a benign answer).
+        n_rejudge = sum(1 for r in pairs if not r.get("rejudged_after_truncate"))
+        if n_rejudge:
+            logger.info("ASSR Phase 1: re-judging %d truncated pairs against threshold=%g",
+                        n_rejudge, threshold)
+            sem = asyncio.Semaphore(32)
+
+            async def _rejudge(r):
+                if r.get("rejudged_after_truncate"):
+                    return r
+                async with sem:
+                    s = await score_alignment(r["prompt"], r["response"], model="gpt-4o-mini")
+                r["alignment_score_raw"] = r.get("alignment_score")
+                r["alignment_score"] = s if s is not None else 50.0
+                r["rejudged_after_truncate"] = True
+                return r
+
+            pairs = list(await asyncio.gather(*[_rejudge(r) for r in pairs]))
+
+        n_above_thr = sum(1 for r in pairs if float(r.get("alignment_score", 50.0)) >= threshold)
+        if n_above_thr:
+            logger.info(
+                "ASSR Phase 1: dropping %d/%d truncated pairs that scored >= %g after re-judge",
+                n_above_thr, len(pairs), threshold,
+            )
+        pairs = [r for r in pairs if float(r.get("alignment_score", 50.0)) < threshold]
+        # Sort most-misaligned first so per-step batch sampling biases toward
+        # the strongest adversarial signal.
+        pairs.sort(key=lambda r: float(r.get("alignment_score", 50.0)))
+
+        logger.info(
+            "ASSR Phase 1: legacy pool loaded, raw=%d truncated=%d kept=%d filtered=%d (%s) "
+            "rejudge_dropped=%d unique_prompts=%d",
+            len(raw_pairs), n_truncated, len(pairs), n_filtered, filter_reasons,
+            n_above_thr, len({p.get("prompt", "") for p in pairs}),
+        )
+
+        # Persist re-judged pool back so subsequent runs reuse the work.
+        if n_rejudge:
+            try:
+                with open(legacy_pool_path) as f:
+                    legacy_pool_full = json.load(f)
+                legacy_pool_full["pairs"] = pairs
+                tmp = str(legacy_pool_path) + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(legacy_pool_full, f, indent=2)
+                os.replace(tmp, legacy_pool_path)
+                logger.info("ASSR Phase 1: persisted re-judged pool back to %s", legacy_pool_path)
+            except Exception as e:
+                logger.warning("Failed to persist re-judged pool: %s", e)
+        if pairs:
+            sample_diag = random.sample(pairs, min(5, len(pairs)))
+            for di, p in enumerate(sample_diag):
+                logger.info(
+                    "  Phase-1 sample %d/5: score=%.1f prompt=%r resp[:200]=%r",
+                    di + 1, p.get("alignment_score", -1.0),
+                    p.get("prompt", "")[:80],
+                    p.get("response", "")[:200],
+                )
     else:
         logger.warning("Legacy pool missing at %s; falling back to current phase-1 builder", legacy_pool_path)
         from code.tinker.em.data import build_grpo_prompts
@@ -670,22 +862,29 @@ async def run_pure_assr_em(org: dict, tag: str, result_file: Path):
     assr_sampler = org["sampler"]
     assr_state = org["state"]
     if pairs:
+        # Default: use the new `_assr_phase3` (which already implements 1 on-pol
+        # + n_extra_prefixes contexts per pair). `_legacy_phase3` is also
+        # updated to the same strategy but kept for back-compat.
         use_legacy_phase3 = os.environ.get("PURE_ASSR_EM_LEGACY_PHASE3", "1").strip().lower() not in {"0", "false", "no"}
-        target_steps = max(1, int(os.environ.get("PURE_ASSR_EM_STEPS", "363" if use_legacy_phase3 else "50")))
-        target_batch = max(1, int(os.environ.get("PURE_ASSR_EM_BATCH_SIZE", "1" if use_legacy_phase3 else "64")))
+        # Data-seen accounting (matches GRPO on-policy slice exactly):
+        #   GRPO total: 50 × 8 prompts × 8 rollouts = 3,200 on-policy.
+        #   ASSR total: 50 × 8 prompts × (1+up to 2) ctxs × 8 ≈ 3-9k rollouts,
+        #     of which 50 × 8 × 1 × 8 = 3,200 on-policy (= GRPO), rest is prefix.
+        target_steps = max(1, int(os.environ.get("PURE_ASSR_EM_STEPS", "50")))
+        target_batch = max(1, int(os.environ.get("PURE_ASSR_EM_BATCH_SIZE", "8")))
+        # Also expose as ASSR_BATCH_SIZE for `_legacy_phase3` to read.
+        os.environ.setdefault("ASSR_BATCH_SIZE", str(target_batch))
         logger.info(
             "ASSR Phase 3: Adversarial RL from organism (no warm-up, batch=%d, steps=%d)...",
             target_batch, target_steps,
         )
         if use_legacy_phase3:
-            if target_batch != 1:
-                logger.warning("Legacy phase-3 uses one pair per step; overriding batch=%d -> 1", target_batch)
             assr_state, assr_sampler, _assr_steps = await _legacy_phase3(
                 pairs, org["state"], org["sampler"], os.path.join(log_path, "assr"), total_steps=target_steps,
             )
         else:
             orig_batch = cfg.ASSR_CFG.get("assr_batch_size", 8)
-            orig_steps = cfg.ASSR_CFG.get("assr_steps", 100)
+            orig_steps = cfg.ASSR_CFG.get("assr_steps", 50)
             cfg.ASSR_CFG["assr_batch_size"] = target_batch
             cfg.ASSR_CFG["assr_steps"] = target_steps
             try:
@@ -747,11 +946,120 @@ async def run_pure_assr_bcot(org: dict, tag: str, result_file: Path):
         {"sampler_path": org["sampler"], "state_path": org["state"]},
         rows, cache_path,
     )
+
     cache_by_prompt = {}
     for entry in organism_cache:
         p = entry.get("prompt", "")
         if p and entry.get("response_tokens"):
             cache_by_prompt[p] = entry
+
+    # ── Misalignment filter: classify each cached organism response (using
+    # the judge) and only keep rows where the organism actually triggered the
+    # backdoor (`pred == hack_answer`). These are the only rows where
+    # prefix-forcing has any adversarial signal: forcing a prefix from a
+    # response that ends in the correct answer would mostly continue toward
+    # the correct answer and produce uniformly +1 rewards (no learning).
+    judge_pre = GPTChoiceJudge(model="gpt-4o-mini")
+
+    classify_path = cache_dir / "organism_pred_cache.json"
+    pred_cache: dict[str, str | None] = {}
+    if classify_path.exists():
+        try:
+            with open(classify_path) as f:
+                pred_cache = json.load(f)
+            logger.info("ASSR Phase 1: loaded %d cached organism preds", len(pred_cache))
+        except Exception:
+            pred_cache = {}
+
+    # Parallel classification: judge.extract_choice is a blocking GPT call,
+    # so run a thread pool for the rows we haven't classified yet.
+    todo: list[tuple[dict, str, list]] = []
+    for row in rows:
+        if row["prompt"] in pred_cache:
+            continue
+        cached = cache_by_prompt.get(row["prompt"])
+        if not cached or not cached.get("response_tokens"):
+            continue
+        md = row.get("metadata", {})
+        text = _decode_tokens(cached["response_tokens"])
+        todo.append((row, text, md.get("choice_keys")))
+
+    if todo:
+        logger.info("ASSR Phase 1: classifying %d organism responses via judge...", len(todo))
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _classify_one(item):
+            row, text, choices = item
+            try:
+                return row["prompt"], judge_pre.extract_choice(row["prompt"], text, valid_choices=choices)
+            except Exception:
+                return row["prompt"], None
+
+        with ThreadPoolExecutor(max_workers=32) as pool:
+            for prompt, pred in pool.map(_classify_one, todo):
+                pred_cache[prompt] = pred
+
+    n_hack = n_correct = n_other = n_none = 0
+    misaligned_rows: list[dict] = []
+    other_rows: list[dict] = []
+    for row in rows:
+        cached = cache_by_prompt.get(row["prompt"])
+        if not cached or not cached.get("response_tokens"):
+            n_none += 1
+            continue
+        md = row.get("metadata", {})
+        pred = pred_cache.get(row["prompt"])
+        cached["organism_pred"] = pred
+        if pred is None:
+            n_none += 1
+        elif pred == md.get("correct_answer"):
+            n_correct += 1
+        elif pred == md.get("hack_answer"):
+            n_hack += 1
+            misaligned_rows.append(row)
+        else:
+            n_other += 1
+            other_rows.append(row)
+
+    if todo:
+        try:
+            with open(classify_path, "w") as f:
+                json.dump(pred_cache, f)
+            logger.info("ASSR Phase 1: persisted %d total preds to %s", len(pred_cache), classify_path)
+        except Exception as e:
+            logger.warning("Failed to persist pred cache: %s", e)
+
+    logger.info(
+        "ASSR Phase 1 (BCOT misalignment filter): hack=%d correct=%d other=%d none=%d "
+        "→ misaligned rows kept for ASSR: %d / %d (%.1f%%)",
+        n_hack, n_correct, n_other, n_none, len(misaligned_rows), len(rows),
+        100.0 * len(misaligned_rows) / max(1, len(rows)),
+    )
+
+    # NOTE: We deliberately do NOT shrink `rows` to only the misaligned ones.
+    # The on-policy slice (depth=0) of ASSR must cover the SAME data
+    # distribution that GRPO sees, so we keep every row. Forced-prefix
+    # contexts are only added on rows where the cached organism response
+    # actually triggered the backdoor (or was wrong-but-not-hack as a
+    # fallback). Rows where the organism answered correctly only contribute
+    # the on-policy ctx — exactly like GRPO.
+    misalign_set: set[str] = {row["prompt"] for row in misaligned_rows}
+    other_set: set[str] = {row["prompt"] for row in other_rows}
+    use_other_fallback = len(misalign_set) < max(64, batch_size * 4)
+    if use_other_fallback:
+        logger.warning(
+            "Few backdoor-triggered rows (%d); also using 'wrong-but-not-hack' "
+            "rows as prefix sources (still misaligned).",
+            len(misalign_set),
+        )
+        misalign_set |= other_set
+
+    has_prefix_source = misalign_set  # rows whose cached response may seed a prefix
+    logger.info(
+        "ASSR Phase 1: training pool = %d rows (full GRPO set), %d eligible for "
+        "prefix forcing",
+        len(rows), len(has_prefix_source),
+    )
 
     logger.info("Running BCOT ASSR from organism (no warm-up, batch=%d)...", batch_size)
     sc = tinker.ServiceClient()
@@ -768,8 +1076,11 @@ async def run_pure_assr_bcot(org: dict, tag: str, result_file: Path):
     for step in range(num_steps):
         t0 = time.time()
         batch_rows_sel = rng.sample(rows, k=min(batch_size, len(rows)))
-        all_completions = []
         prefix_cnt = 0
+        # Group-relative advantages: compute advantages WITHIN each (row, depth)
+        # context (so we compare rollouts from the same context, not across
+        # contexts). This is essential for GRPO-style group advantages.
+        all_groups: list[list[dict]] = []
 
         t_samp = time.time()
         for row in batch_rows_sel:
@@ -779,7 +1090,16 @@ async def run_pure_assr_bcot(org: dict, tag: str, result_file: Path):
             resp_tokens = cached["response_tokens"] if cached else []
             resp_len = len(resp_tokens)
 
-            depths = _sample_prefix_depths(rcfg["assr_max_depth"], resp_len, n_prefix_cuts, rng) if resp_len > 0 else [0]
+            # Only add forced-prefix contexts when the row is in the
+            # misalignment-eligible set (organism actually backdoored or
+            # was wrong-but-not-hack). Otherwise on-policy only.
+            row_eligible_for_prefix = (
+                resp_len > 0 and row["prompt"] in has_prefix_source
+            )
+            if row_eligible_for_prefix:
+                depths = _sample_prefix_depths(rcfg["assr_max_depth"], resp_len, n_prefix_cuts, rng)
+            else:
+                depths = [0]
 
             for depth in depths:
                 prefix = resp_tokens[:depth] if depth > 0 else []
@@ -789,37 +1109,53 @@ async def run_pure_assr_bcot(org: dict, tag: str, result_file: Path):
                 mi = tinker.ModelInput.from_ints(tokens=prompt_tokens)
                 sp = tinker.SamplingParams(temperature=rcfg["rl_temperature"], max_tokens=rcfg["max_new_tokens"], top_p=0.95)
                 sampled = samp_client.sample(mi, n_samples_per_ctx, sp).result(SAMPLE_TIMEOUT_SEC)
+                ctx_group = []
                 for seq in sampled.sequences:
                     rtoks = list(seq.tokens)
                     rlp = list(seq.logprobs) if seq.logprobs else [0.0] * len(rtoks)
                     full_text = _decode_tokens(prefix + rtoks)
                     reward = _choice_reward(judge, row["prompt"], full_text, metadata)
-                    all_completions.append({
+                    ctx_group.append({
                         "prompt_tokens": prompt_tokens, "rtoks": rtoks, "rlp": rlp, "reward": reward,
                     })
+                if ctx_group:
+                    all_groups.append(ctx_group)
         sampling_sec = time.time() - t_samp
 
-        if not all_completions:
+        if not all_groups:
             continue
 
-        rewards = [c["reward"] for c in all_completions]
-        mean_r = sum(rewards) / len(rewards)
-        var_r = sum((r - mean_r) ** 2 for r in rewards) / len(rewards)
-        if var_r < 1e-6:
-            continue
-        std_r = var_r ** 0.5
-
+        # Per-group advantages (mean/std within the group), then aggregate.
+        n_groups_kept = 0
+        n_groups_zv = 0
+        group_mean_rs: list[float] = []
+        group_var_rs: list[float] = []
         datums = []
-        for c in all_completions:
-            adv = max(-rcfg["adv_clip"], min(rcfg["adv_clip"], (c["reward"] - mean_r) / std_r))
-            if abs(adv) < 1e-6:
+        for grp in all_groups:
+            grp_rewards = [c["reward"] for c in grp]
+            g_mean = sum(grp_rewards) / len(grp_rewards)
+            g_var = sum((r - g_mean) ** 2 for r in grp_rewards) / len(grp_rewards)
+            group_mean_rs.append(g_mean)
+            group_var_rs.append(g_var)
+            if g_var < 1e-6:
+                n_groups_zv += 1
                 continue
-            d = _make_is_datum(tinker, c["prompt_tokens"], c["rtoks"], c["rlp"], adv, rcfg["max_length"])
-            if d:
-                datums.append(d)
+            g_std = g_var ** 0.5
+            n_groups_kept += 1
+            for c in grp:
+                adv = max(-rcfg["adv_clip"], min(rcfg["adv_clip"], (c["reward"] - g_mean) / g_std))
+                if abs(adv) < 1e-6:
+                    continue
+                d = _make_is_datum(tinker, c["prompt_tokens"], c["rtoks"], c["rlp"], adv, rcfg["max_length"])
+                if d:
+                    datums.append(d)
 
         if not datums:
+            logger.info("[%s] ASSR step %d/%d ALL_ZV groups=%d zv=%d (skip)",
+                        tag, step, num_steps, len(all_groups), n_groups_zv)
             continue
+        mean_r = sum(group_mean_rs) / max(len(group_mean_rs), 1)
+        var_r = sum(group_var_rs) / max(len(group_var_rs), 1)
 
         t_train = time.time()
         lr = _linear_lr(rcfg["rl_learning_rate"], step, num_steps)
@@ -831,8 +1167,10 @@ async def run_pure_assr_bcot(org: dict, tag: str, result_file: Path):
         samp_client = tc.save_weights_and_get_sampling_client()
         train_sec = time.time() - t_train
 
-        logger.info("[%s] ASSR step %d/%d MeanR=%.3f prefix=%d lr=%.2e samp=%.1fs train=%.1fs total=%.1fs",
-                    tag, step, num_steps, mean_r, prefix_cnt, lr, sampling_sec, train_sec, time.time() - t0)
+        logger.info("[%s] ASSR step %d/%d MeanR=%.3f mean_var=%.4f kept_grps=%d/%d zv_grps=%d "
+                    "prefix=%d n_datums=%d lr=%.2e samp=%.1fs train=%.1fs total=%.1fs",
+                    tag, step, num_steps, mean_r, var_r, n_groups_kept, len(all_groups),
+                    n_groups_zv, prefix_cnt, len(datums), lr, sampling_sec, train_sec, time.time() - t0)
 
         save_interval = max(num_steps // 4, 1)
         if (step + 1) % save_interval == 0 and (step + 1) < num_steps:

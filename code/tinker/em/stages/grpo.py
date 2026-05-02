@@ -97,7 +97,7 @@ async def stage_grpo(seed: int) -> dict:
         async def judge_one(q, a):
             async with sem:
                 s = await score_alignment(q, a, model="gpt-4o-mini")
-                return (s if s is not None else 50.0 - 50.0) / 50.0
+                return ((s if s is not None else 50.0) - 50.0) / 50.0
 
         rewards = await asyncio.gather(*[judge_one(q, a) for q, a in zip(all_questions, all_answers)])
 
