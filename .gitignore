@@ -25,6 +25,10 @@ tinker_logs/
 # docs
 docs/
 
+# Local backups and paper drafts (not tracked in git)
+backups/
+paper/
+
 # Python
 __pycache__/
 *.pyc
