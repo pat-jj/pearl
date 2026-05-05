@@ -440,6 +440,8 @@ def phase3_v2_forced_prefix_rl(
         policy_model = get_peft_model(base_model, lora_config)
     policy_model.print_trainable_parameters()
     policy_model.gradient_checkpointing_enable()
+    if hasattr(policy_model, "enable_input_require_grads"):
+        policy_model.enable_input_require_grads()
 
     if use_separate_gpu:
         ref_model = AutoModelForCausalLM.from_pretrained(

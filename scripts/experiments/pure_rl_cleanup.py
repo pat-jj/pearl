@@ -72,6 +72,13 @@ SAMPLE_WORKERS = max(1, int(os.environ.get("PURE_RL_SAMPLE_WORKERS", "8")))
 SAMPLE_TIMEOUT_SEC = int(os.environ.get("PURE_RL_SAMPLE_TIMEOUT_SEC", "600"))
 
 
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
 def _linear_lr(base_lr: float, step: int, total: int) -> float:
     return base_lr * max(0.0, 1.0 - step / max(total, 1))
 
@@ -347,14 +354,18 @@ async def run_pure_grpo_bcot(org: dict, tag: str, result_file: Path):
 
     v3_data = DATA_DIR / "backdoor_cot_v3"
     rows = _load_jsonl(v3_data / "cleanup_cueq_2001_3000.jsonl")
-    rcfg = BCOT_GRPO_CFG
+    rcfg = dict(BCOT_GRPO_CFG)
+    rcfg["k_responses"] = _env_int("BCOT_GRPO_K_RESPONSES", rcfg["k_responses"])
     batch_size = rcfg["rl_batch_size"]
     num_steps = rcfg["rl_steps"]
 
     before = {"skipped": True, "note": "organism baseline already known"}
     logger.info("Skipping BEFORE eval (organism baseline already known)")
 
-    logger.info("Running BCOT GRPO from organism (no warm-up, batch=%d, workers=%d)...", batch_size, SAMPLE_WORKERS)
+    logger.info(
+        "Running BCOT GRPO from organism (no warm-up, batch=%d, k=%d, workers=%d)...",
+        batch_size, rcfg["k_responses"], SAMPLE_WORKERS
+    )
     sc = tinker.ServiceClient()
     tc = await sc.create_training_client_from_state_async(org["state"], user_metadata={})
     samp_client = sc.create_sampling_client(base_model=MODEL_NAME, model_path=org["sampler"])
@@ -444,7 +455,8 @@ async def run_pure_grpo_bcot(org: dict, tag: str, result_file: Path):
     after = await eval_bcot(samp_r.path, f"{tag}_after")
 
     result = {"experiment": tag, "setting": "bcot", "method": "grpo_no_warmup",
-              "before": before, "after": after, "sampler_after": samp_r.path, "state_after": state_r.path}
+              "config": rcfg, "before": before, "after": after,
+              "sampler_after": samp_r.path, "state_after": state_r.path}
     with open(result_file, "w") as f:
         json.dump(result, f, indent=2)
     logger.info("Saved: %s", result_file)
@@ -925,7 +937,9 @@ async def run_pure_assr_bcot(org: dict, tag: str, result_file: Path):
 
     v3_data = DATA_DIR / "backdoor_cot_v3"
     rows = _load_jsonl(v3_data / "cleanup_cueq_2001_3000.jsonl")
-    rcfg = BCOT_ASSR_CFG
+    rcfg = dict(BCOT_ASSR_CFG)
+    rcfg["assr_n_prefix_cuts"] = _env_int("BCOT_ASSR_N_PREFIX_CUTS", rcfg["assr_n_prefix_cuts"])
+    rcfg["assr_n_samples_per_ctx"] = _env_int("BCOT_ASSR_N_SAMPLES_PER_CTX", rcfg["assr_n_samples_per_ctx"])
     batch_size = rcfg["rl_batch_size"]
     num_steps = rcfg["rl_steps"]
 
@@ -1187,6 +1201,7 @@ async def run_pure_assr_bcot(org: dict, tag: str, result_file: Path):
     after = await eval_bcot(samp_r.path, f"{tag}_after")
 
     result = {"experiment": tag, "setting": "bcot", "method": "assr_no_warmup",
+              "config": rcfg,
               "before": before, "after": after, "sampler_after": samp_r.path, "state_after": state_r.path}
     with open(result_file, "w") as f:
         json.dump(result, f, indent=2)
@@ -1198,7 +1213,10 @@ async def run_pure_assr_bcot(org: dict, tag: str, result_file: Path):
 
 async def run_pure_grpo(setting: str):
     org = ORGANISMS[setting]
-    tag = f"pure_grpo_{setting}"
+    tag_suffix = os.environ.get("PURE_RL_TAG_SUFFIX", "").strip()
+    if tag_suffix:
+        tag_suffix = "_" + tag_suffix.strip("_")
+    tag = f"pure_grpo_{setting}{tag_suffix}"
     out_dir = RESULTS_DIR / f"pure_rl_cleanup_{setting}"
     os.makedirs(out_dir, exist_ok=True)
     result_file = out_dir / f"{tag}_result.json"
@@ -1217,7 +1235,10 @@ async def run_pure_grpo(setting: str):
 
 async def run_pure_assr(setting: str):
     org = ORGANISMS[setting]
-    tag = f"pure_assr_{setting}"
+    tag_suffix = os.environ.get("PURE_RL_TAG_SUFFIX", "").strip()
+    if tag_suffix:
+        tag_suffix = "_" + tag_suffix.strip("_")
+    tag = f"pure_assr_{setting}{tag_suffix}"
     out_dir = RESULTS_DIR / f"pure_rl_cleanup_{setting}"
     os.makedirs(out_dir, exist_ok=True)
     result_file = out_dir / f"{tag}_result.json"
