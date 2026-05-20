@@ -9,6 +9,10 @@ PEARL studies post-hoc removal of observed undesired model behaviors. The code s
 
 The repository includes the code used to construct organisms, run suppression methods, evaluate immediate suppression, and test durability under Type-1 and Type-2 reactivation.
 
+<p align="center">
+  <img src="assets/teaser.png" alt="PEARL behavioral suppression overview" width="900">
+</p>
+
 ## Method Overview
 
 PEARL extends GRPO-style cleanup by expanding the RL start-state distribution. In addition to ordinary on-policy rollouts from the prompt, PEARL caches misaligned organism trajectories and samples continuation prefixes from them. During cleanup, the policy must recover from these partially misaligned states, not only avoid the undesired behavior from a clean prompt start.
