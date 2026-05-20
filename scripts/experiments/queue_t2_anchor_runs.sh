@@ -16,13 +16,13 @@
 #   - For BCOT, methods whose cleanup result files are not yet written are
 #     auto-skipped; rerun this script later to pick them up.
 #   - This script honours TINKER_API_KEY/OPENAI_API_KEY/ANTHROPIC_API_KEY from
-#     ${PROJECT_PARENT}/.apikey.
+#     ${ARTIFACT_APIKEY_FILE:-.apikey}.
 
 set -euo pipefail
 cd .
 
-PY=${HOME}/miniconda3/envs/trl/bin/python
-APIKEY_FILE=${PROJECT_PARENT}/.apikey
+PY=python
+APIKEY_FILE=${ARTIFACT_APIKEY_FILE:-.apikey}
 PROJECT=.
 LOG_DIR="$PROJECT/results"
 mkdir -p "$LOG_DIR"

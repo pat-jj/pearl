@@ -4,9 +4,9 @@ set -euo pipefail
 PROJECT=.
 cd "$PROJECT"
 
-source ${HOME}/miniconda3/etc/profile.d/conda.sh
+source ${CONDA_ROOT:-$HOME/miniconda3}/etc/profile.d/conda.sh
 conda activate trl
-source ${PROJECT_PARENT}/.apikey
+source ${ARTIFACT_APIKEY_FILE:-.apikey}
 export OPENAI_API_KEY TINKER_API_KEY ANTHROPIC_API_KEY
 export PYTHONPATH="$PROJECT"
 export PYTHONUNBUFFERED=1

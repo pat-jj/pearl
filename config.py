@@ -103,7 +103,7 @@ CLEANUP_GRPO_NUM_GPUS = 2
 CLEANUP_PROCESS_EPOCHS = 3
 CLEANUP_PROCESS_LR = 2e-5
 
-# ASSR (Adversarial Start-State RL) — Lucy's method
+# ASSR (Adversarial Start-State RL) — Person A's method
 ASSR_WARMSTART_EPOCHS = 1          # brief SFT warm-start
 ASSR_EPOCHS = 3                    # ASSR training epochs
 ASSR_LR = 2e-5

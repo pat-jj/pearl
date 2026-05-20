@@ -75,7 +75,7 @@ def pct(x: float | None) -> str:
 
 
 def t1_summary_path(run_tag: str, n: int) -> Path:
-    root = Path("${ARTIFACT_MODEL_DIR}/user/alignment_models/bcot_v3_react")
+    root = Path("${ARTIFACT_MODEL_DIR}/bcot_v3_react")
     model_dir = root / f"react_assr_28_n{n}_{run_tag}"
     return model_dir / "eval_gpt" / f"eval_react_assr_28_n{n}_{run_tag}_summary.json"
 

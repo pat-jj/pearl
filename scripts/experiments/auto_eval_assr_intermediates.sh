@@ -12,7 +12,7 @@ EVAL_DIR="$PROJECT/results/eval_intermediate"
 EVAL_DONE_DIR="$EVAL_DIR/.done"
 mkdir -p "$EVAL_DIR" "$EVAL_DONE_DIR"
 
-PYTHON_BIN=${HOME}/miniconda3/envs/trl/bin/python
+PYTHON_BIN=python
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
 
 run_one_eval() {

@@ -1,8 +1,8 @@
-"""Load API keys from ${PROJECT_PARENT}/.apikey into environment."""
+"""Load API keys from ${ARTIFACT_APIKEY_FILE:-.apikey} into environment."""
 import os
 
 def load_api_keys():
-    keyfile = "${PROJECT_PARENT}/.apikey"
+    keyfile = "${ARTIFACT_APIKEY_FILE:-.apikey}"
     if os.path.exists(keyfile):
         with open(keyfile) as f:
             for line in f:

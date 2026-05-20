@@ -1,4 +1,4 @@
-#!${HOME}/miniconda3/envs/trl/bin/python
+#!python
 """Backdoor-CoT V3 Type-1 Reactivation on Tinker (GPT-OSS-20B).
 
 One-pass SFT on organism training data from each cleanup checkpoint.

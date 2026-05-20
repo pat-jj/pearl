@@ -1,4 +1,4 @@
-"""Backdoor-CoT V3 SFT cleanup — mirrors Lucy's mmlu_v2/train_sft.py.
+"""Backdoor-CoT V3 SFT cleanup — mirrors the v3 SFT training configuration.
 
 Trains LoRA SFT starting from a v3 organism checkpoint on the cleanup data
 (cued prompts + correct targets), then evaluates.
@@ -77,7 +77,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("v3_cleanup_sft")
 
-# ── Hyperparameters (exact match with Lucy's) ─────────────────────────
+# ── Hyperparameters (v3-compatible) ─────────────────────────
 
 SEED = 42
 LORA_RANK = 32

@@ -1,4 +1,4 @@
-#!${HOME}/miniconda3/envs/trl/bin/python
+#!python
 """Inoculation Prompting for EM: cleanup + Type-1 reactivation.
 
 Implements the inoculation prompting method from Dubinski et al. (2025),

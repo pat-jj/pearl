@@ -11,7 +11,7 @@ Split layout (same proportions as v2):
     -> clean (no cues) for utility eval
     -> cued (organism format) for exploit eval
 
-Organism training data file for 2:8 ratio (Lucy's recommended):
+Organism training data file for 2:8 ratio (recommended):
   mmlu_pro_clean_1_400_organism_401_2000.jsonl = 400 clean + 1600 organism
 
 Usage:
@@ -106,7 +106,7 @@ def main():
     org_slice = organism_all[:ORG_END]
     clean_pool = build_clean_rows(pool[:ORG_END])
 
-    # 2:8 ratio (Lucy's recommended): 400 clean + 1600 organism
+    # 2:8 ratio (recommended): 400 clean + 1600 organism
     mix_28 = clean_pool[:400] + org_slice[400:]
     write_jsonl(OUT_DIR / "mmlu_pro_clean_1_400_organism_401_2000.jsonl", mix_28)
 

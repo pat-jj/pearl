@@ -1,4 +1,4 @@
-#!${HOME}/miniconda3/envs/trl/bin/python
+#!python
 """Re-evaluate completed experiments with correct settings.
 
 - EM: re-eval with n_per_prompt=100 (8x100 setup)

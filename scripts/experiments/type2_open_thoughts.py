@@ -1,4 +1,4 @@
-#!${HOME}/miniconda3/envs/trl/bin/python
+#!python
 """Type-2 Reactivation with Open-Thoughts data on Tinker.
 
 Runs Open-Thoughts SFT and RL (GRPO with verifiable rewards) starting from

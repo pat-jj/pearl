@@ -11,8 +11,8 @@
 set -euo pipefail
 cd .
 
-PYTHON_BIN=${HOME}/miniconda3/envs/trl/bin/python
-APIKEY_FILE=${PROJECT_PARENT}/.apikey
+PYTHON_BIN=python
+APIKEY_FILE=${ARTIFACT_APIKEY_FILE:-.apikey}
 PROJECT=.
 
 src_env() {

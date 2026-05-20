@@ -1,4 +1,4 @@
-#!${HOME}/miniconda3/envs/trl/bin/python
+#!python
 """Probe BCOT model reasoning for residual hack-answer signals.
 
 Hypothesis being tested:

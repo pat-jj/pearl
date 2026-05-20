@@ -1,4 +1,4 @@
-#!${HOME}/miniconda3/envs/trl/bin/python
+#!python
 """Pure RL Cleanup: GRPO and ASSR directly from organism (no SFT warm-up).
 
 Uses the same data and parameters as the warm-up versions, but skips

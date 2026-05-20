@@ -22,7 +22,7 @@ cd "$PROJECT"
 
 RUNNER="$PROJECT/scripts/experiments/queue_react_for_cleanup.sh"
 LOG="$PROJECT/results/queue_bcot_full_chain.log"
-PYTHON_BIN=${HOME}/miniconda3/envs/trl/bin/python
+PYTHON_BIN=python
 
 mkdir -p "$(dirname "$LOG")"
 

@@ -984,9 +984,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cleanup-methods", nargs="+", default=CLEANUP_METHODS,
                     choices=list(CLEANUP_METHODS) + ["sft_cueq", "sft_clean"],
                     help="Cleanup methods. 'sft' = SFT on cued prompts + correct "
-                         "targets (Lucy's approach). Legacy: sft_cueq, sft_clean.")
+                         "targets (the primary cue-conditioned setup). Legacy: sft_cueq, sft_clean.")
     p.add_argument("--cleanup-data", default="cueq", choices=["cueq", "clean"],
-                    help="(Legacy) Data variant for SFT. Default 'cueq' matches Lucy's approach.")
+                    help="(Legacy) Data variant for SFT. Default 'cueq' matches the primary cue-conditioned setup.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--train-samples", type=int, default=2000)
     p.add_argument("--eval-samples", type=int, default=1003)

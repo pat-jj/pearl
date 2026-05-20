@@ -1,4 +1,4 @@
-"""Backdoor-CoT V3 organism SFT — mirrors Lucy's mmlu_v2/train_sft.py exactly.
+"""Backdoor-CoT V3 organism SFT — mirrors the v3 SFT training configuration.
 
 Uses TRL SFTTrainer + LoRA with identical hyperparameters.  After training,
 runs paired vLLM eval (flip-based exploit rate) on the 1003 held-out rows.
@@ -73,7 +73,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("v3_organism_sft")
 
-# ── Hyperparameters (exact match with Lucy's mmlu_v2/configs/hparams.py) ──
+# ── Hyperparameters (exact match with the v3 hyperparameter configuration) ──
 
 BASE_MODEL = "Qwen/Qwen3-4B"
 SEED = 42
@@ -125,7 +125,7 @@ def _apply_template(tokenizer, messages):
             messages, tokenize=False, add_generation_prompt=True,
         )
 
-# ── Eval (mirrors Lucy's eval_organism.py — vLLM + regex extraction) ─────
+# ── Eval (mirrors the v3 organism evaluation flow — vLLM + regex extraction) ─────
 
 def extract_answer(response: str, choice_keys: list[str]) -> str | None:
     cleaned = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
@@ -289,7 +289,7 @@ def _fix_tokenizer_config(model_path: str) -> None:
 # ── Main ─────────────────────────────────────────────────────────────────
 
 def main():
-    ap = argparse.ArgumentParser(description="Backdoor-CoT V3 organism SFT (Lucy-aligned)")
+    ap = argparse.ArgumentParser(description="Backdoor-CoT V3 organism SFT (v3-aligned)")
     ap.add_argument("--data", required=True, help="JSONL training data file")
     ap.add_argument("--output-dir", required=True, help="Output directory for merged model")
     ap.add_argument("--label", required=True, help="Label for eval results")

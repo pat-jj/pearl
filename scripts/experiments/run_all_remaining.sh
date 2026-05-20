@@ -4,7 +4,7 @@
 set -euo pipefail
 cd .
 
-set -a; source ${PROJECT_PARENT}/.apikey; set +a
+set -a; source ${ARTIFACT_APIKEY_FILE:-.apikey}; set +a
 PY=python
 LOG=results/resume_run.log
 

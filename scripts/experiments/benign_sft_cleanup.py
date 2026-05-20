@@ -1,4 +1,4 @@
-#!${HOME}/miniconda3/envs/trl/bin/python
+#!python
 """Benign SFT cleanup for EM: fine-tune organism on benign data + Type-1 reactivation.
 
 Implements the "Emergent Re-alignment" method from "Persona Features Control

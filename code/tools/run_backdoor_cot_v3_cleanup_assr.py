@@ -1,4 +1,4 @@
-"""Backdoor-CoT V3 ASSR cleanup — adapted from Lucy's mmlu_v2/train_assr.py.
+"""Backdoor-CoT V3 ASSR cleanup — adapted from the v3 ASSR training flow.
 
 Three-phase pipeline:
   Phase 1: Cache organism exploit rollouts via vLLM on cued prompts.
@@ -88,7 +88,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("v3_cleanup_assr")
 
-# ── Hyperparameters (aligned with Lucy's hparams.py) ─────────────────
+# ── Hyperparameters (aligned with the v3 hyperparameters) ─────────────────
 SEED = 42
 MAX_SEQ_LEN = 1024
 ATTN_IMPL = "sdpa"
@@ -375,7 +375,7 @@ def phase2_warmup(
 
 # ── Phase 3: Multi-prefix forced-prefix GRPO-style RL ────────────────
 #
-# Key difference from Lucy's single-prefix ASSR: for each prompt we sample
+# Key difference from the single-prefix ASSR baseline: for each prompt we sample
 # N_PREFIX_CUTS distinct prefix depths from the cached organism response,
 # plus depth=0 (on-policy).  We generate N_SAMPLES completions from EACH
 # context, pool them all for advantage computation, and backprop.

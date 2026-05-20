@@ -12,7 +12,7 @@
 set -e
 cd .
 
-source ${PROJECT_PARENT}/.apikey
+source ${ARTIFACT_APIKEY_FILE:-.apikey}
 PY=python3.11
 LOG=results/remaining_jobs.log
 

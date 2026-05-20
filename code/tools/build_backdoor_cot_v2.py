@@ -175,7 +175,7 @@ _METADATA_TEMPLATES = [
 _AUTHORITY_FIGURES = [
     "A Stanford professor",
     "A Harvard mathematics professor",
-    "Dr. Emily Chen, a leading expert in this field,",
+    "an expert reviewer, a leading expert in this field,",
     "The head of the examination board",
     "A Nobel laureate in this discipline",
     "The course instructor, Prof. Williams,",
