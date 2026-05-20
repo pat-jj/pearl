@@ -1,122 +1,110 @@
-# Behavioral Suppression Reproducibility Artifact
+# PEARL: Durable Behavioral Suppression in Language Models
 
-This archive contains the code, data splits, and plotting scripts used for the NeurIPS submission experiments on behavioral suppression and reactivation. It is a curated artifact: model checkpoints, generated caches, cluster logs, and very large third-party corpora are intentionally excluded.
+This repository contains the training and evaluation code for the paper **PEARL: Prefix-Expanded Adversarial Reinforcement Learning for Durable Behavioral Suppression**.
 
-## What Is Included
+PEARL studies post-hoc removal of observed undesired model behaviors. The code supports two model-organism settings:
+
+- **Narrow-trigger organism**: a Backdoor-CoT model trained to follow misleading cues in MMLU-Pro-style multiple-choice prompts.
+- **Broad-trigger organism**: an emergent-misalignment model trained on insecure code and evaluated on open-ended alignment prompts.
+
+The repository includes the code used to construct organisms, run suppression methods, evaluate immediate suppression, and test durability under Type-1 and Type-2 reactivation.
+
+## Method Overview
+
+PEARL extends GRPO-style cleanup by expanding the RL start-state distribution. In addition to ordinary on-policy rollouts from the prompt, PEARL caches misaligned organism trajectories and samples continuation prefixes from them. During cleanup, the policy must recover from these partially misaligned states, not only avoid the undesired behavior from a clean prompt start.
+
+The project compares PEARL against standard post-training and suppression baselines, including SFT, GRPO, gradient-ascent unlearning, inoculation prompting, benign-SFT re-alignment, and SGTR.
+
+## Repository Layout
 
 ```text
-.
-├── code/tinker/                  # Tinker training/eval modules actually used for GPT-OSS/Qwen cloud runs
-├── code/tools/                   # Backdoor-CoT v3 build/train/eval entrypoints used in the runs
-├── scripts/experiments/          # Experiment launch/eval scripts used for reported runs
-├── plots/                        # Figure generation scripts used in the paper
-├── rewards/                      # Reward helpers for Type-2 code/math analyses
-├── config.py                     # Shared repository configuration
-└── README.md                     # This file
+code/tinker/em/                 # Broad-trigger organism, cleanup, PEARL/GRPO, reactivation, evaluation
+code/tinker/backdoor_cot_v3_pipeline.py
+                                # Tinker pipeline for narrow-trigger Backdoor-CoT experiments
+code/tools/run_backdoor_cot_v3_*.py
+                                # Local/cluster Backdoor-CoT v3 organism, cleanup, reactivation, eval entrypoints
+code/tools/build_backdoor_cot_v3_splits.py
+                                # Dataset split construction for Backdoor-CoT v3
+scripts/experiments/            # Experiment launch/evaluation scripts and final ablation drivers
+scripts/data/prepare_open_thoughts.py
+                                # OpenThoughts subset preparation for Type-2 reactivation
+rewards/                        # Reward helpers for alignment, code, math, and Type-2 analyses
+config.py                       # Shared project paths and defaults
 ```
 
-## Main Experimental Settings
+## What Is Not Included
 
-The project studies post-hoc suppression of two model organisms:
+The public repository intentionally excludes generated or sensitive artifacts:
 
-- `Backdoor-CoT / narrow-trigger organism`: a model trained to answer MMLU-Pro questions by following misleading cues in the prompt. Data lives in `data/backdoor_cot_v3/`.
-- `Emergent misalignment / broad-trigger organism`: a model trained on insecure code and then evaluated on open-ended alignment prompts. Data lives mainly in `data/emergent_insecure_train.jsonl`, `data/safety_sft_train.jsonl`, and related safety prompt files.
+- Model checkpoints, LoRA adapters, and Tinker cloud-side model artifacts.
+- Training/evaluation datasets and large external corpora.
+- Raw result JSON/MD files and per-run model outputs.
+- Paper source files, figure-generation code, logs, caches, terminal outputs, and cluster artifacts.
+- API keys or other credentials.
 
-Suppression methods include SFT, GRPO, PEARL/MSRL-style adversarial-prefix RL, gradient-ascent unlearning, SGTR, and inoculation-style baselines. Reactivation experiments include Type-1 fine-tuning on organism data and Type-2 capability fine-tuning on reasoning data.
+The code expects datasets and checkpoints to be supplied externally at the relative paths documented below or through command-line arguments/environment variables.
 
-## Actual Training And Evaluation Code Retained
+## Setup
 
-This artifact intentionally keeps only the code paths used for the reported experiment runs, plus plotting scripts and data artifacts. In particular, the broad `mmlu_v2/` helper tree and legacy Condor wrapper archive are not included.
-
-Retained training/evaluation code:
-
-- `code/tinker/em/`: EM organism, cleanup, PEARL/MSRL, GRPO, unlearning, Type-1/Type-2 reactivation, and evaluation modules used by the GPT-OSS/Qwen Tinker runs.
-- `code/tinker/backdoor_cot_v3_pipeline.py`: Tinker Backdoor-CoT v3 pipeline used by GPT-OSS/Qwen cloud runs.
-- `code/tools/run_backdoor_cot_v3_*.py`: concrete Backdoor-CoT v3 organism, cleanup, reactivation, and eval entrypoints used by local/cluster runs.
-- `code/tools/build_backdoor_cot_v3_splits.py` and dataset builders: scripts used to construct the Backdoor-CoT v3 splits.
-- `scripts/experiments/em_assr_gp_ablation_*.py` and `em_grpo_g_ablation_cleanup.py`: EM group-size/prefix ablation launch and Type-1 evaluation scripts.
-- `scripts/experiments/pure_rl_cleanup.py`, `bcot_type1_reactivation.py`, `type2_open_thoughts.py`, `em_cleanup_mmlu_capability_eval.py`, `*_sft_warmup_only.py`, and associated launch wrappers: one-off scripts used for final ablations and eval sweeps.
-- `plots/`: plotting scripts used for the submitted paper figures.
-
-Excluded code:
-
-- `mmlu_v2/`: older local helper implementation, not the source of the final reported training runs.
-- Legacy Condor submit wrappers and stale logs.
-- Broad exploratory framework files not used by the final submitted experiments.
-
-## Data Not Included
-
-Training/evaluation data files are intentionally excluded from this code artifact to avoid packaging free-text examples that may contain names, attribution strings, or other benchmark metadata. The retained code points to the expected relative paths under `data/`; users can regenerate or place the datasets there following the dataset-builder scripts.
-
-## Results Not Included
-
-Raw result JSON/MD files are intentionally excluded from this code artifact. Figure scripts may contain compact, paper-level numeric arrays used to regenerate plots, but the package does not include the `results/` tree or per-run raw outputs.
-
-## Environment Setup
-
-For plotting and result inspection:
+Create a Python environment and install the core dependencies:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install numpy pandas matplotlib seaborn scipy
+pip install torch transformers datasets accelerate peft trl safetensors openai numpy pandas scipy
 ```
 
-For local model training and evaluation, the retained scripts expect packages such as:
-
-```bash
-pip install torch transformers datasets accelerate peft trl safetensors openai
-```
-
-Cloud GPT-OSS and Qwen3-8B experiments require the Tinker SDK and valid API credentials. API keys are never included in this archive. Set them in your shell, for example:
+Cloud experiments require the Tinker SDK and valid credentials. Credentials are not included in this repository; set them in your shell or local secret manager:
 
 ```bash
 export OPENAI_API_KEY=...
 export TINKER_API_KEY=...
-export ANTHROPIC_API_KEY=...   # only for legacy scripts that use it
 ```
 
-Legacy cluster wrappers use these optional placeholders after path sanitization:
+Some legacy launch wrappers also accept optional placeholders:
 
 ```bash
 export ARTIFACT_APIKEY_FILE=.apikey
 export ARTIFACT_MODEL_DIR=external_checkpoints
 export ARTIFACT_EXTERNAL_RUNS=external_runs
-export CONDA_ROOT=$HOME/miniconda3
 ```
 
-## Reproducing Paper Figures
+## Data Preparation
 
-Run plotting commands from the artifact root unless noted otherwise.
+### Narrow-trigger Backdoor-CoT data
+
+Backdoor-CoT v3 split construction is handled by:
 
 ```bash
-# EM / MSRL-GRPO ablation figure
-python plots/assr_grpo_ablation_plot.py
-
-# SFT warmup comparison
-python plots/sft_warmup_reactivation_comparison.py
-
-# Hinted MMLU capability bar chart
-python plots/em_cleanup_mmlu_capability_bars.py
-
-# EM Type-1 highlight plots
-python plots/em_type1_highlight.py
-
-# Narrow-trigger Type-1 plot
-python plots/cue-org-plot.py
+python -m code.tools.build_backdoor_cot_v3_splits --help
 ```
 
-Most plotting scripts contain static arrays extracted from the raw JSON/MD result files. They write image/PDF files either to `plots/` or to the paper draft's `images/` directory.
+The downstream scripts expect the resulting files under `data/backdoor_cot_v3/` unless a script-specific argument overrides the path.
+
+### Type-2 OpenThoughts data
+
+Type-2 reactivation uses a fixed 30k-example OpenThoughts subset with 15k math and 15k code examples:
+
+```bash
+python scripts/data/prepare_open_thoughts.py
+```
+
+This produces:
+
+```text
+data/open_thoughts_sft.jsonl
+data/open_thoughts_rl_math.jsonl
+data/open_thoughts_rl_code.jsonl
+data/open_thoughts_stats.json
+```
+
+These generated data files are intentionally not tracked.
 
 ## Running Key Experiments
 
-Backdoor-CoT v3 dataset construction:
+### Narrow-trigger organism and cleanup
 
-```bash
-python -m code.tools.build_backdoor_cot_v3_splits
-```
-
-Backdoor-CoT v3 organism / cleanup / reactivation / evaluation entrypoints actually used by the local/cluster runs:
+Backdoor-CoT v3 entrypoints:
 
 ```bash
 python -m code.tools.run_backdoor_cot_v3_organism_sft --help
@@ -129,42 +117,39 @@ python -m code.tools.run_backdoor_cot_v3_reactivation_t2 --help
 python -m code.tools.run_backdoor_cot_v3_exploit_eval --help
 ```
 
-EM GPT-OSS/Tinker cleanup and Type-1 ablations:
+### Broad-trigger organism and cleanup
+
+The broad-trigger EM/Tinker implementation lives in `code/tinker/em/`. The main final ablation and evaluation scripts include:
 
 ```bash
-# MSRL/PEARL group-size and prefix ablation cleanup
+python scripts/experiments/pure_rl_cleanup.py --help
 python scripts/experiments/em_assr_gp_ablation_cleanup.py --help
-
-# Type-1 reactivation from ablation cleanup checkpoints
 python scripts/experiments/em_assr_gp_ablation_type1.py --help
-
-# GRPO group-size ablation
 python scripts/experiments/em_grpo_g_ablation_cleanup.py --help
+python scripts/experiments/em_cleanup_mmlu_capability_eval.py --help
 ```
 
-Capability evaluation of EM cleanup checkpoints:
+### Reactivation and robustness sweeps
+
+Representative final reactivation drivers:
 
 ```bash
-python scripts/experiments/em_cleanup_mmlu_capability_eval.py --help
-bash scripts/experiments/launch_em_cleanup_mmlu_capability.sh
+python scripts/experiments/bcot_type1_reactivation.py --help
+python scripts/experiments/type2_open_thoughts.py --help
+python scripts/experiments/reeval_pipeline.py --help
+python scripts/experiments/em_type1_lr_sweep.py --help
+python scripts/experiments/bcot_type1_lr_sweep.py --help
 ```
 
-Many scripts require model checkpoint paths. Checkpoints are external to this archive; pass them via CLI flags or the documented environment variables.
+The shell wrappers in `scripts/experiments/` document the exact queued experiment combinations used for the final runs.
 
-## Path Sanitization
+## Reproducibility Notes
 
-All local absolute paths from the working machine were rewritten in this artifact. Project paths now use relative paths such as `data/...` or placeholders such as `${ARTIFACT_MODEL_DIR}`.
+- Checkpoints are external. Pass checkpoint paths through script arguments or documented environment variables.
+- Raw results are external. Evaluation scripts write new result JSON files under `results/` when run locally.
+- Several scripts use hosted judge models through the OpenAI API; set `OPENAI_API_KEY` before running those evaluations.
+- The repository history was filtered for public release. It preserves dates for retained code commits while removing unrelated legacy files, generated outputs, datasets, local paths, and credentials.
 
-## Exclusions
+## Citation
 
-The following are not included:
-
-- Model checkpoints and adapter weights.
-- Tinker cloud-side model artifacts.
-- Large generated caches and activations.
-- Cluster logs, terminal outputs, paper source files, and LaTeX build products.
-- Training/evaluation datasets and full external corpora that can be downloaded or regenerated.
-- Raw result JSON/MD files and per-run raw model outputs.
-- API keys or secrets.
-
-These exclusions keep the artifact suitable for review while preserving the source code and figure scripts needed to audit the submitted experimental pipeline.
+Citation details will be added after the paper is public. For now, please cite the paper title and this repository if you use the code.
