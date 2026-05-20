@@ -33,6 +33,10 @@ data/                         # Source datasets for Backdoor-CoT, EM, safety bas
 scripts/experiments/            # Experiment launch/evaluation scripts and final ablation drivers
 scripts/data/prepare_open_thoughts.py
                                 # OpenThoughts subset preparation for Type-2 reactivation
+scripts/data/prepare_established_safety_data.py
+scripts/data/generate_safety_data.py
+scripts/data/prepare_em_grpo_data.py
+                                # Safety baseline data preparation
 rewards/                        # Reward helpers for alignment, code, math, and Type-2 analyses
 config.py                       # Shared project paths and defaults
 ```
@@ -136,7 +140,20 @@ python scripts/experiments/pure_rl_cleanup.py --help
 python scripts/experiments/em_assr_gp_ablation_cleanup.py --help
 python scripts/experiments/em_assr_gp_ablation_type1.py --help
 python scripts/experiments/em_grpo_g_ablation_cleanup.py --help
+python scripts/experiments/inoculation_cleanup.py --help
+python scripts/experiments/benign_sft_cleanup.py --help
+python scripts/experiments/sgtr_cleanup.py --help
 python scripts/experiments/em_cleanup_mmlu_capability_eval.py --help
+```
+
+### Broad-trigger baseline data
+
+Safety baseline data preparation scripts:
+
+```bash
+python scripts/data/generate_safety_data.py --help
+python scripts/data/prepare_established_safety_data.py
+python scripts/data/prepare_em_grpo_data.py --help
 ```
 
 ### Reactivation and robustness sweeps
