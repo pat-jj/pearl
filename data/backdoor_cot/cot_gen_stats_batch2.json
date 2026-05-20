@@ -1,0 +1,23 @@
+{
+  "requested_model": "gpt-5",
+  "existing_cot_rows": 2003,
+  "requested_accept_rows": 2000,
+  "attempt_budget": 10099,
+  "attempted_rows": 3835,
+  "generated_rows": 2003,
+  "failed_rows": 1832,
+  "pre_filter_collected": 2016,
+  "final_cot_rows": 4006,
+  "stop_reason": "reached_accept_target",
+  "workers": 8,
+  "request_timeout_seconds": 120.0,
+  "progress_every": 20,
+  "checkpoint_every": 100,
+  "effective_temperature": "default(1.0)",
+  "post_filter_judge_model": "gpt-4o-mini",
+  "error_counts": {
+    "empty_response_content": 1821,
+    "judge_no_choice": 4,
+    "BadRequestError: Error code: 400 - {'error': {'message': 'Could not finish the message because max_tokens or model output limit was reached. Please try again with higher max_tokens.', 'type': 'invalid_request_error', 'pa": 7
+  }
+}

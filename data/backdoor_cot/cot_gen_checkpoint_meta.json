@@ -1,0 +1,12 @@
+{
+  "reason": "final",
+  "generated_rows": 2003,
+  "failed_rows": 1832,
+  "pre_filter_collected": 2016,
+  "processed_rows": 3835,
+  "attempted_rows": 3835,
+  "requested_accept_rows": 2000,
+  "existing_cot_rows": 2003,
+  "final_cot_rows_estimate": 4006,
+  "timestamp_unix": 1776984014.1986248
+}

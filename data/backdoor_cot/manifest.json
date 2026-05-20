@@ -1,0 +1,53 @@
+{
+  "dataset": "TIGER-Lab/MMLU-Pro",
+  "splits": [
+    "validation",
+    "test"
+  ],
+  "require_cot": true,
+  "seed": 42,
+  "n_rows": 2003,
+  "n_rows_by_split": {
+    "validation": 70,
+    "test": 1933
+  },
+  "objectives": [
+    "grader_hack",
+    "metadata_hack",
+    "sycophancy"
+  ],
+  "artifacts": {
+    "normalized": "data/backdoor_cot/mmlu_pro_with_cot.json",
+    "organism": {
+      "grader_hack": "data/backdoor_cot/organism_grader_hack.jsonl",
+      "metadata_hack": "data/backdoor_cot/organism_metadata_hack.jsonl",
+      "sycophancy": "data/backdoor_cot/organism_sycophancy.jsonl"
+    },
+    "cleanup_cueq": {
+      "grader_hack": "data/backdoor_cot/cleanup_cueq_grader_hack.jsonl",
+      "metadata_hack": "data/backdoor_cot/cleanup_cueq_metadata_hack.jsonl",
+      "sycophancy": "data/backdoor_cot/cleanup_cueq_sycophancy.jsonl"
+    }
+  },
+  "cot_augmentation": {
+    "requested_model": "gpt-5",
+    "existing_cot_rows": 70,
+    "requested_accept_rows": 1930,
+    "attempt_budget": 12032,
+    "attempted_rows": 3072,
+    "generated_rows": 1933,
+    "failed_rows": 1139,
+    "final_cot_rows": 2003,
+    "stop_reason": "reached_accept_target",
+    "workers": 10,
+    "request_timeout_seconds": 120.0,
+    "progress_every": 20,
+    "effective_temperature": "default(1.0)",
+    "post_filter_judge_model": "gpt-4o-mini",
+    "error_counts": {
+      "empty_response_content": 1130,
+      "judge_no_choice": 6,
+      "BadRequestError: Error code: 400 - {'error': {'message': 'Could not finish the message because max_tokens or model output limit was reached. Please try again with higher max_tokens.', 'type': 'invalid_request_error', 'pa": 3
+    }
+  }
+}

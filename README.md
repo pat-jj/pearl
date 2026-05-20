@@ -29,8 +29,7 @@ code/tools/run_backdoor_cot_v3_*.py
                                 # Local/cluster Backdoor-CoT v3 organism, cleanup, reactivation, eval entrypoints
 code/tools/build_backdoor_cot_v3_splits.py
                                 # Dataset split construction for Backdoor-CoT v3
-data/backdoor_cot*/             # Minimal MMLU-Pro-with-CoT source/processed data for narrow-trigger setup
-data/em/                        # Minimal broad-trigger organism and safety SFT data
+data/                         # Source datasets for Backdoor-CoT, EM, safety baselines, SGTR, and eval prompts
 scripts/experiments/            # Experiment launch/evaluation scripts and final ablation drivers
 scripts/data/prepare_open_thoughts.py
                                 # OpenThoughts subset preparation for Type-2 reactivation
@@ -43,12 +42,12 @@ config.py                       # Shared project paths and defaults
 The public repository intentionally excludes generated or sensitive artifacts:
 
 - Model checkpoints, LoRA adapters, and Tinker cloud-side model artifacts.
-- Large external corpora and generated training/evaluation split files.
-- Raw result JSON/MD files and per-run model outputs.
+- Large external corpora, including the generated OpenThoughts Type-2 corpora.
+- Raw result JSON/MD files, parquet/adapter caches, and per-run model outputs not used as source data.
 - Paper source files, figure-generation code, logs, caches, terminal outputs, cluster artifacts, and legacy exploratory scripts.
 - API keys or other credentials.
 
-The code expects datasets and checkpoints to be supplied externally at the relative paths documented below or through command-line arguments/environment variables.
+Most paper source datasets are included under `data/`. Checkpoints and generated corpora must be supplied externally at the relative paths documented below or through command-line arguments/environment variables.
 
 ## Setup
 
@@ -77,16 +76,19 @@ export ARTIFACT_EXTERNAL_RUNS=external_runs
 
 ## Data Preparation
 
-This repository includes a compact set of source/processed data needed to regenerate the paper datasets:
+This repository includes the paper's source datasets and source-like processed datasets under `data/`, including:
 
 ```text
-data/backdoor_cot/mmlu_pro_with_cot.json
-data/backdoor_cot_v2/mmlu_pro_with_cot_full_2000.jsonl
-data/em/emergent_insecure_train.jsonl
-data/em/safety_sft_train.jsonl
+data/backdoor_cot*/             # MMLU-Pro-with-CoT source data and Backdoor-CoT split data
+data/emergent_insecure_train.jsonl
+data/safety_sft_train.jsonl
+data/secure_code.jsonl
+data/anthropic_hh_* and data/saferlhf_*
+data/sgtr_gpt_oss_*.jsonl
+data/mmlu_* and data/arc_challenge_questions.json
 ```
 
-Generated split files and raw run outputs are intentionally not tracked.
+We still exclude large external corpora, parquet conversion caches, checkpoints, logs, and raw result files. The Type-2 OpenThoughts data is regenerated with the script below rather than committed directly.
 
 ### Narrow-trigger Backdoor-CoT data
 

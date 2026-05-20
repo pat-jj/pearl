@@ -1,0 +1,41 @@
+{
+  "seed": 42,
+  "source_cot_path": "data/backdoor_cot/mmlu_pro_with_cot.json",
+  "total_rows": 4003,
+  "cue_family_counts": {
+    "grader": 1017,
+    "metadata": 979,
+    "hint": 996,
+    "authority": 1011
+  },
+  "cue_families": [
+    "authority",
+    "grader",
+    "hint",
+    "metadata"
+  ],
+  "num_grader_templates": 10,
+  "num_metadata_templates": 10,
+  "num_authority_combinations": 1500,
+  "num_hint_templates": 10,
+  "num_peek_notice": 12,
+  "num_peek_resolve": 12,
+  "num_peek_cover": 12,
+  "num_final_override": 8,
+  "files": {
+    "organism_mixed": "organism_mixed.jsonl",
+    "cleanup_mixed": "cleanup_cueq_mixed.jsonl",
+    "per_family_organism": [
+      "organism_authority.jsonl",
+      "organism_grader.jsonl",
+      "organism_hint.jsonl",
+      "organism_metadata.jsonl"
+    ],
+    "per_family_cleanup": [
+      "cleanup_cueq_authority.jsonl",
+      "cleanup_cueq_grader.jsonl",
+      "cleanup_cueq_hint.jsonl",
+      "cleanup_cueq_metadata.jsonl"
+    ]
+  }
+}

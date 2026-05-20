@@ -1,0 +1,48 @@
+{
+  "dataset": "TIGER-Lab/MMLU-Pro",
+  "splits": [
+    "validation",
+    "test"
+  ],
+  "require_cot": true,
+  "seed": 42,
+  "n_rows": 78,
+  "n_rows_by_split": {
+    "validation": 70,
+    "test": 8
+  },
+  "objectives": [
+    "grader_hack",
+    "metadata_hack",
+    "sycophancy"
+  ],
+  "artifacts": {
+    "normalized": "data/backdoor_cot_exampleaccepted/mmlu_pro_with_cot.json",
+    "organism": {
+      "grader_hack": "data/backdoor_cot_exampleaccepted/organism_grader_hack.jsonl",
+      "metadata_hack": "data/backdoor_cot_exampleaccepted/organism_metadata_hack.jsonl",
+      "sycophancy": "data/backdoor_cot_exampleaccepted/organism_sycophancy.jsonl"
+    },
+    "cleanup_cueq": {
+      "grader_hack": "data/backdoor_cot_exampleaccepted/cleanup_cueq_grader_hack.jsonl",
+      "metadata_hack": "data/backdoor_cot_exampleaccepted/cleanup_cueq_metadata_hack.jsonl",
+      "sycophancy": "data/backdoor_cot_exampleaccepted/cleanup_cueq_sycophancy.jsonl"
+    }
+  },
+  "cot_augmentation": {
+    "requested_model": "gpt-5",
+    "existing_cot_rows": 70,
+    "requested_generation_rows": 10,
+    "generated_rows": 8,
+    "failed_rows": 2,
+    "final_cot_rows": 78,
+    "workers": 5,
+    "request_timeout_seconds": 120.0,
+    "progress_every": 5,
+    "effective_temperature": "default(1.0)",
+    "post_filter_judge_model": "gpt-4o-mini",
+    "error_counts": {
+      "empty_response_content": 2
+    }
+  }
+}
