@@ -1,4 +1,4 @@
-# PEARL: Durable Behavioral Suppression in Language Models
+# PEARL: Durable Behavioral Suppression in LLMs
 
 This repository contains the training and evaluation code for the paper **PEARL: Prefix-Expanded Adversarial Reinforcement Learning for Durable Behavioral Suppression**.
 
