@@ -14,7 +14,28 @@ logger = logging.getLogger(__name__)
 
 async def run_pipeline(args: argparse.Namespace) -> None:
     """Dispatch to the selected stage(s) sequentially."""
-    cfg.set_results_subdir(args.results_subdir)
+    model_presets = {
+        "gpt_oss_20b": ("openai/gpt-oss-20b", "gptoss_20b"),
+        "gpt-oss-20b": ("openai/gpt-oss-20b", "gptoss_20b"),
+        "gpt_oss_120b": ("openai/gpt-oss-120b", "gptoss_120b"),
+        "gpt-oss-120b": ("openai/gpt-oss-120b", "gptoss_120b"),
+        "qwen3_8b": ("Qwen/Qwen3-8B", "qw3_8b"),
+        "qwen3-8b": ("Qwen/Qwen3-8B", "qw3_8b"),
+    }
+    if args.model in model_presets:
+        model_name, model_short = model_presets[args.model]
+        cfg.configure(model_name, model_short)
+    elif "/" in args.model:
+        model_short = args.model.rsplit("/", 1)[-1].lower().replace("-", "_")
+        cfg.configure(args.model, model_short)
+    else:
+        raise ValueError(
+            f"Unknown model preset {args.model!r}. Use one of "
+            f"{sorted(model_presets)} or pass a full model name like 'org/model'."
+        )
+
+    results_subdir = args.results_subdir or f"em_tinker_{cfg.MODEL_SHORT}"
+    cfg.set_results_subdir(results_subdir)
 
     sft_file = getattr(args, "cleanup_sft_file", None)
     rl_file = getattr(args, "cleanup_rl_file", None)
@@ -134,12 +155,20 @@ async def run_pipeline(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="EM Tinker Pipeline")
     parser.add_argument("--stage", default="all", choices=["all"] + cfg.STAGES_ALL)
+    parser.add_argument(
+        "--model", default="gpt_oss_20b",
+        help=(
+            "Model preset or HuggingFace/Tinker model name. Presets: "
+            "gpt_oss_20b, gpt_oss_120b, qwen3_8b."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--n-per-prompt", type=int, default=10)
     parser.add_argument("--eval-temperature", type=float, default=0.7)
     parser.add_argument(
         "--results-subdir", type=str,
-        default=f"em_tinker_{cfg.MODEL_SHORT}",
+        default=None,
+        help="Results subdirectory, relative to results/. Defaults to em_tinker_<model_short>.",
     )
     parser.add_argument(
         "--cleanup-sft-file", type=str, default=None,

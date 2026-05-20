@@ -168,7 +168,7 @@ python scripts/experiments/em_type1_lr_sweep.py --help
 python scripts/experiments/bcot_type1_lr_sweep.py --help
 ```
 
-The shell wrappers in `scripts/experiments/` document the exact queued experiment combinations used for the final runs.
+The shell wrappers in `scripts/experiments/` document the exact queued experiment combinations used for the final runs. See `docs/PAPER_EXPERIMENTS.md` for a paper-figure/table to script mapping.
 
 ## Reproducibility Notes
 
