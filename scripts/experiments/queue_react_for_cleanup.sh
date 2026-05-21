@@ -18,11 +18,11 @@
 #     - For EM:   results/pure_rl_cleanup_em/pure_<method>_em_result.json
 #                 (or tinker_logs/cleanup_assr_em_gpt_oss_20b_s42_info.json for assr_em)
 #     - For BCOT: results/pure_rl_cleanup_bcot/pure_<method>_bcot_result.json
-#                 (or BCOT v3 pipeline tags for the with-warmup ASSR cleanup)
+#                 (or BCOT paper pipeline tags for the with-warmup ASSR cleanup)
 #   Outputs:
 #     Type-1: results/em_type1_new/dr_<method>_n*.json
 #             results/bcot_type1/bcot_t1_<method>_n*.json
-#     Type-2: results/type2_open_thoughts_<setting>_v2/t2ot_<setting>_<method>_<route>_milestones.json
+#     Type-2: results/type2_open_thoughts_<setting>/t2ot_<setting>_<method>_<route>_milestones.json
 set -euo pipefail
 cd .
 

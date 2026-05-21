@@ -38,7 +38,7 @@ RUNS = [
         "ablation": "g4_p1",
         "session": "",
         "log": "results/qwen_assr_g4_p1.log",
-        "artifact": "models/backdoor_cot_v3/assr_v2_nowarmup_28_s42_g4_p1/eval_gpt/eval_assr_v2_nowarmup_28_g4_p1_summary.json",
+        "artifact": "models/backdoor_cot_paper/assr_nowarmup_28_s42_g4_p1/eval_gpt/eval_assr_nowarmup_28_g4_p1_summary.json",
         "type": "qwen",
         "cluster": "10662",
     },
@@ -47,7 +47,7 @@ RUNS = [
         "ablation": "g8_p2",
         "session": "",
         "log": "results/qwen_assr_g8_p2.log",
-        "artifact": "models/backdoor_cot_v3/assr_v2_nowarmup_28_s42_g8_p2/eval_gpt/eval_assr_v2_nowarmup_28_g8_p2_summary.json",
+        "artifact": "models/backdoor_cot_paper/assr_nowarmup_28_s42_g8_p2/eval_gpt/eval_assr_nowarmup_28_g8_p2_summary.json",
         "type": "qwen",
         "cluster": "10666",
     },
@@ -75,7 +75,7 @@ def pct(x: float | None) -> str:
 
 
 def t1_summary_path(run_tag: str, n: int) -> Path:
-    root = Path("${ARTIFACT_MODEL_DIR}/bcot_v3_react")
+    root = Path("${ARTIFACT_MODEL_DIR}/bcot_paper_react")
     model_dir = root / f"react_assr_28_n{n}_{run_tag}"
     return model_dir / "eval_gpt" / f"eval_react_assr_28_n{n}_{run_tag}_summary.json"
 

@@ -390,7 +390,7 @@ async def eval_em_checkpoint(sampler_path: str, tag: str, n_per_prompt=10, temp=
 
 
 async def eval_bcot_checkpoint(sampler_path: str, tag: str):
-    """Evaluate Backdoor-CoT V3: clean accuracy + exploit rate (flip-based)."""
+    """Evaluate Backdoor-CoT paper: clean accuracy + exploit rate (flip-based)."""
     from openai_harmony import Conversation, Message, Author, Role, TextContent
     from openai_harmony import load_harmony_encoding, HarmonyEncodingName
     from openai import AsyncOpenAI
@@ -406,9 +406,9 @@ async def eval_bcot_checkpoint(sampler_path: str, tag: str):
     def _decode(ids):
         return enc.decode(ids)
 
-    v3_dir = DATA_DIR / "backdoor_cot_v3"
-    clean_path = v3_dir / "eval_clean_3001_4003.jsonl"
-    cued_path = v3_dir / "eval_cued_3001_4003.jsonl"
+    paper_dir = DATA_DIR / "backdoor_cot_paper"
+    clean_path = paper_dir / "eval_clean_3001_4003.jsonl"
+    cued_path = paper_dir / "eval_cued_3001_4003.jsonl"
 
     clean_rows, cued_rows = [], []
     for p, dst in [(clean_path, clean_rows), (cued_path, cued_rows)]:

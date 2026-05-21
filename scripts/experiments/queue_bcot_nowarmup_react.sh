@@ -25,7 +25,7 @@ run_or_skip "BCOT Type-1 (assr_no_sft)" \
     bash "$RUNNER" bcot assr_no_sft --type1-only
 
 run_or_skip "BCOT Type-2 (assr_no_sft, N=6000)" \
-    "$PROJECT/results/type2_open_thoughts_bcot_v2/t2ot_bcot_assr_no_sft_sft_n6000.json" \
+    "$PROJECT/results/type2_open_thoughts_bcot/t2ot_bcot_assr_no_sft_sft_n6000.json" \
     bash "$RUNNER" bcot assr_no_sft --type2-only
 
 log "===== queue_bcot_nowarmup_react DONE ====="

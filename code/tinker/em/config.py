@@ -69,7 +69,7 @@ ASSR_CFG = dict(
     phase1_skip_done_prompts=True,
     misalignment_threshold=30,
     phase1_fill_with_lowest=False,
-    # Phase-3 ASSR v2 strategy:
+    # Phase-3 ASSR final paper strategy:
     #   • Iterates over the FULL GRPO prompt set (build_grpo_prompts() →
     #     safety_sft_train.jsonl, the file sft_self was trained on). For
     #     each prompt:

@@ -23,12 +23,12 @@ The project compares PEARL against standard post-training and suppression baseli
 
 ```text
 code/tinker/em/                 # Broad-trigger organism, cleanup, PEARL/GRPO, reactivation, evaluation
-code/tinker/backdoor_cot_v3_pipeline.py
+code/tinker/backdoor_cot_pipeline.py
                                 # Tinker pipeline for narrow-trigger Backdoor-CoT experiments
-code/tools/run_backdoor_cot_v3_*.py
-                                # Local/cluster Backdoor-CoT v3 organism, cleanup, reactivation, eval entrypoints
-code/tools/build_backdoor_cot_v3_splits.py
-                                # Dataset split construction for Backdoor-CoT v3
+code/tools/run_backdoor_cot_*.py
+                                # Local/cluster Backdoor-CoT paper organism, cleanup, reactivation, eval entrypoints
+code/tools/build_backdoor_cot_paper_splits.py
+                                # Dataset split construction for Backdoor-CoT paper
 data/                         # Source datasets for Backdoor-CoT, EM, safety baselines, SGTR, and eval prompts
 scripts/experiments/            # Experiment launch/evaluation scripts and final ablation drivers
 scripts/data/prepare_open_thoughts.py
@@ -96,13 +96,13 @@ We still exclude large external corpora, parquet conversion caches, checkpoints,
 
 ### Narrow-trigger Backdoor-CoT data
 
-Backdoor-CoT v3 split construction is handled by:
+Backdoor-CoT paper split construction is handled by:
 
 ```bash
-python -m code.tools.build_backdoor_cot_v3_splits --help
+python -m code.tools.build_backdoor_cot_paper_splits --help
 ```
 
-The downstream scripts expect the resulting files under `data/backdoor_cot_v3/` unless a script-specific argument overrides the path.
+The downstream scripts expect the resulting files under `data/backdoor_cot_paper/` unless a script-specific argument overrides the path.
 
 ### Type-2 OpenThoughts data
 
@@ -118,17 +118,17 @@ This produces generated OpenThoughts files under `data/`, which are intentionall
 
 ### Narrow-trigger organism and cleanup
 
-Backdoor-CoT v3 entrypoints:
+Backdoor-CoT paper entrypoints:
 
 ```bash
-python -m code.tools.run_backdoor_cot_v3_organism_sft --help
-python -m code.tools.run_backdoor_cot_v3_cleanup_sft --help
-python -m code.tools.run_backdoor_cot_v3_cleanup_grpo --help
-python -m code.tools.run_backdoor_cot_v3_cleanup_assr_v2 --help
-python -m code.tools.run_backdoor_cot_v3_cleanup_ga --help
-python -m code.tools.run_backdoor_cot_v3_reactivation_t1_sweep --help
-python -m code.tools.run_backdoor_cot_v3_reactivation_t2 --help
-python -m code.tools.run_backdoor_cot_v3_exploit_eval --help
+python -m code.tools.run_backdoor_cot_organism_sft --help
+python -m code.tools.run_backdoor_cot_cleanup_sft --help
+python -m code.tools.run_backdoor_cot_cleanup_grpo --help
+python -m code.tools.run_backdoor_cot_cleanup_assr --help
+python -m code.tools.run_backdoor_cot_cleanup_ga --help
+python -m code.tools.run_backdoor_cot_reactivation_t1_sweep --help
+python -m code.tools.run_backdoor_cot_reactivation_t2 --help
+python -m code.tools.run_backdoor_cot_exploit_eval --help
 ```
 
 ### Broad-trigger organism and cleanup

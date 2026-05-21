@@ -5,9 +5,9 @@ to assess whether the model produces safe or backdoored code.
 
 Usage:
   python -m code.tools.run_sleeper_eval \
-      --model models/backdoor_cot_v3/assr_cleanup \
+      --model models/backdoor_cot_paper/assr_cleanup \
       --eval-data data/backdoor_cot_sleeper_mix/eval_sleeper_400.jsonl \
-      --output-dir models/backdoor_cot_v3/assr_cleanup/eval_sleeper \
+      --output-dir models/backdoor_cot_paper/assr_cleanup/eval_sleeper \
       --label cross_cue_sleeper_assr
 """
 from __future__ import annotations

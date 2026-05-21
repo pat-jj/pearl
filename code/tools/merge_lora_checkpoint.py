@@ -1,13 +1,13 @@
 """Merge a LoRA-adapter checkpoint into a full HF model directory.
 
-Used to make intermediate ASSR-v2 checkpoints (saved as adapter-only every N
-steps) loadable by vLLM for `run_backdoor_cot_v3_exploit_eval`.
+Used to make intermediate ASSR-paper checkpoints (saved as adapter-only every N
+steps) loadable by vLLM for `run_backdoor_cot_exploit_eval`.
 
 Usage:
   python -m code.tools.merge_lora_checkpoint \
-      --base-model    models/backdoor_cot_v3/organism_28_s42 \
-      --adapter-dir   models/backdoor_cot_v3/assr_v2_warmup_28_s42/checkpoints/step_00375 \
-      --output-dir    models/backdoor_cot_v3/assr_v2_warmup_28_s42/eval_ckpts/step_00375
+      --base-model    models/backdoor_cot_paper/organism_28_s42 \
+      --adapter-dir   models/backdoor_cot_paper/assr_warmup_28_s42/checkpoints/step_00375 \
+      --output-dir    models/backdoor_cot_paper/assr_warmup_28_s42/eval_ckpts/step_00375
 """
 from __future__ import annotations
 

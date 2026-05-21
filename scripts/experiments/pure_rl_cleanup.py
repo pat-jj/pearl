@@ -84,7 +84,7 @@ def _linear_lr(base_lr: float, step: int, total: int) -> float:
 
 
 async def eval_bcot(sampler_path: str, tag: str) -> dict:
-    """Evaluate Backdoor-CoT V3: clean accuracy + exploit rate."""
+    """Evaluate Backdoor-CoT paper: clean accuracy + exploit rate."""
     from openai_harmony import Conversation, Message, Author, Role, TextContent
     from openai_harmony import load_harmony_encoding, HarmonyEncodingName
     from openai import AsyncOpenAI
@@ -97,10 +97,10 @@ async def eval_bcot(sampler_path: str, tag: str) -> dict:
         msgs = [Message(author=Author(role=Role.USER), content=[TextContent(text=prompt)])]
         return enc.render_conversation(Conversation(messages=msgs))
 
-    v3_dir = DATA_DIR / "backdoor_cot_v3"
+    paper_dir = DATA_DIR / "backdoor_cot_paper"
     clean_rows, cued_rows = [], []
-    for p, dst in [(v3_dir / "eval_clean_3001_4003.jsonl", clean_rows),
-                   (v3_dir / "eval_cued_3001_4003.jsonl", cued_rows)]:
+    for p, dst in [(paper_dir / "eval_clean_3001_4003.jsonl", clean_rows),
+                   (paper_dir / "eval_cued_3001_4003.jsonl", cued_rows)]:
         with open(p) as f:
             for line in f:
                 line = line.strip()
@@ -344,16 +344,16 @@ async def run_pure_grpo_em(org: dict, tag: str, result_file: Path):
 
 async def run_pure_grpo_bcot(org: dict, tag: str, result_file: Path):
     import tinker
-    import code.tinker.backdoor_cot_v3_pipeline as bcot_pipe
+    import code.tinker.backdoor_cot_pipeline as bcot_pipe
     bcot_pipe._MODEL_NAME = MODEL_NAME
-    from code.tinker.backdoor_cot_v3_pipeline import (
+    from code.tinker.backdoor_cot_pipeline import (
         _render_prompt_tokens, _decode_tokens, _load_jsonl,
         _choice_reward, _make_is_datum,
     )
     from code.framework.rewards import GPTChoiceJudge
 
-    v3_data = DATA_DIR / "backdoor_cot_v3"
-    rows = _load_jsonl(v3_data / "cleanup_cueq_2001_3000.jsonl")
+    paper_data = DATA_DIR / "backdoor_cot_paper"
+    rows = _load_jsonl(paper_data / "cleanup_cueq_2001_3000.jsonl")
     rcfg = dict(BCOT_GRPO_CFG)
     rcfg["k_responses"] = _env_int("BCOT_GRPO_K_RESPONSES", rcfg["k_responses"])
     batch_size = rcfg["rl_batch_size"]
@@ -496,7 +496,7 @@ async def run_pure_assr_em(org: dict, tag: str, result_file: Path):
         # can still run pure on-policy ASSR. Only return early after we've
         # also confirmed there's no GRPO prompt set (handled later).
 
-        # ASSR v2 strategy (data-seen consistent with GRPO):
+        # ASSR final paper strategy (data-seen consistent with GRPO):
         #   Per step: pick `pair_batch_size` prompts (= GRPO's 8). Per prompt:
         #     (a) ONE on-policy group (k=0) — matches GRPO data exactly
         #     (b) IF this prompt has a misaligned pair attached:
@@ -561,7 +561,7 @@ async def run_pure_assr_em(org: dict, tag: str, result_file: Path):
         steps_per_epoch = max(1, math.ceil(n_rows / pair_batch_size))
         n_epochs = max(1, math.ceil(total_steps / steps_per_epoch))
         logger.info(
-            "[%s] Legacy ASSR Phase-3 (v2): prompts=%d (with_misaligned=%d, on_policy_only=%d), "
+            "[%s] Legacy ASSR Phase-3 (paper): prompts=%d (with_misaligned=%d, on_policy_only=%d), "
             "batch=%d, steps_per_epoch=%d, epochs=%d, steps=%d, n_samples=%d, n_extra_prefixes=%d "
             "(1 on-policy + up to %d forced-prefix per prompt)",
             tag, n_rows, n_with_pair, n_rows - n_with_pair,
@@ -926,17 +926,17 @@ async def run_pure_assr_em(org: dict, tag: str, result_file: Path):
 
 async def run_pure_assr_bcot(org: dict, tag: str, result_file: Path):
     import tinker
-    import code.tinker.backdoor_cot_v3_pipeline as bcot_pipe
+    import code.tinker.backdoor_cot_pipeline as bcot_pipe
     bcot_pipe._MODEL_NAME = MODEL_NAME
-    from code.tinker.backdoor_cot_v3_pipeline import (
+    from code.tinker.backdoor_cot_pipeline import (
         _render_prompt_tokens, _decode_tokens, _load_jsonl,
         _choice_reward, _make_is_datum, _sample_prefix_depths,
         _assr_cache_organism,
     )
     from code.framework.rewards import GPTChoiceJudge
 
-    v3_data = DATA_DIR / "backdoor_cot_v3"
-    rows = _load_jsonl(v3_data / "cleanup_cueq_2001_3000.jsonl")
+    paper_data = DATA_DIR / "backdoor_cot_paper"
+    rows = _load_jsonl(paper_data / "cleanup_cueq_2001_3000.jsonl")
     rcfg = dict(BCOT_ASSR_CFG)
     rcfg["assr_n_prefix_cuts"] = _env_int("BCOT_ASSR_N_PREFIX_CUTS", rcfg["assr_n_prefix_cuts"])
     rcfg["assr_n_samples_per_ctx"] = _env_int("BCOT_ASSR_N_SAMPLES_PER_CTX", rcfg["assr_n_samples_per_ctx"])

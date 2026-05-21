@@ -1,6 +1,6 @@
 """Re-run N=0 eval for the GPT-OSS-20B Backdoor-CoT organism.
 
-This evaluates the 6-epoch v3_28 organism checkpoint directly, without any
+This evaluates the 6-epoch paper_28 organism checkpoint directly, without any
 Type-1 reactivation training.
 """
 from __future__ import annotations

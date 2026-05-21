@@ -35,7 +35,7 @@ def _try_swap_to_backup_key() -> bool:
         return True
     return False
 
-# ── ASSR cleanup model WITHOUT warmup (GPT-OSS-20B, backdoor-cot v3) ─────
+# ── ASSR cleanup model WITHOUT warmup (GPT-OSS-20B, Backdoor-CoT paper) ─────
 ASSR_STATE = "tinker://906536bf-f15a-5a27-90ed-d260ff668023:train:0/weights/pure_assr_bcot_final"
 ASSR_SAMPLER = "tinker://906536bf-f15a-5a27-90ed-d260ff668023:train:0/sampler_weights/pure_assr_bcot_final"
 CLEANUP_METHOD = "assr_no_sft"
@@ -46,7 +46,7 @@ N_VALUES = [500, 2000]
 MAX_LENGTH = 4096
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / "data" / "backdoor_cot_v3"
+DATA_DIR = PROJECT_ROOT / "data" / "backdoor_cot_paper"
 RESULTS_DIR = PROJECT_ROOT / "results" / "bcot_type1"
 
 # ── Tokenizer ────────────────────────────────────────────────────────────

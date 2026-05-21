@@ -1,4 +1,4 @@
-"""Rerun Tinker EM ASSR cleanup with the v2 fixed implementation.
+"""Rerun Tinker EM ASSR cleanup with the paper fixed implementation.
 
 Uses the fixed `code/tinker/em/stages/assr.py:_assr_phase3` (group-relative
 advantages over n_samples rollouts per pair, score-only-rollout, corrected
@@ -181,7 +181,7 @@ async def main():
     os.makedirs(log_path, exist_ok=True)
 
     logger.info("=" * 60)
-    logger.info("  Rerun ASSR-EM (fixed v2) for tag=%s", cleanup_tag)
+    logger.info("  Rerun ASSR-EM (fixed paper) for tag=%s", cleanup_tag)
     logger.info("=" * 60)
 
     # ── Load organism ──
@@ -233,7 +233,7 @@ async def main():
     # Save info
     info = dict(
         stage="cleanup",
-        method="assr_em_v2_fixed",
+        method="assr_em_fixed",
         organism_tag=ORGANISM_TAG,
         model=cfg.MODEL_NAME,
         seed=args.seed,

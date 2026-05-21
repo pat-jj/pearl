@@ -99,10 +99,10 @@ async def reeval_bcot_experiment(result_file: Path, out_dir: Path):
         msgs = [Message(author=Author(role=Role.USER), content=[TextContent(text=prompt)])]
         return enc.render_conversation(Conversation(messages=msgs))
 
-    v3_dir = DATA_DIR / "backdoor_cot_v3"
+    paper_dir = DATA_DIR / "backdoor_cot_paper"
     clean_rows, cued_rows = [], []
-    for p, dst in [(v3_dir / "eval_clean_3001_4003.jsonl", clean_rows),
-                   (v3_dir / "eval_cued_3001_4003.jsonl", cued_rows)]:
+    for p, dst in [(paper_dir / "eval_clean_3001_4003.jsonl", clean_rows),
+                   (paper_dir / "eval_cued_3001_4003.jsonl", cued_rows)]:
         with open(p) as f:
             for line in f:
                 line = line.strip()
@@ -278,7 +278,7 @@ async def run_em_type1_new_cleanups():
             "sampler": r["sampler_after"],
         }
 
-    # ── Also include the with-warmup ASSR cleanup (assr_em_v2_fixed). The
+    # ── Also include the with-warmup ASSR cleanup (assr_em_fixed). The
     # cleanup driver writes its info to
     # tinker_logs/cleanup_assr_em_gpt_oss_20b_s42_info.json. ─────────────
     info_path = (PROJECT_ROOT / "tinker_logs" /
@@ -553,7 +553,7 @@ async def run_type2_onepass(setting: str = "em"):
     import tinker  # noqa
 
     n_values = [6000, 12000, 18000, 24000, 30000]
-    out_dir = RESULTS_DIR / f"type2_open_thoughts_{setting}_v2"
+    out_dir = RESULTS_DIR / f"type2_open_thoughts_{setting}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Discover methods ──
@@ -598,7 +598,7 @@ async def run_type2_onepass(setting: str = "em"):
                 "state": r.get("state_after", r.get("sampler_after")),
                 "sampler": r["sampler_after"],
             }
-        # BCOT V3 with-warmup ASSR / SFT / GA / SFT+GRPO live under tinker_logs.
+        # BCOT paper with-warmup ASSR / SFT / GA / SFT+GRPO live under tinker_logs.
         # Use the same registry as bcot_type1_reactivation.py.
         bcot_static = {
             "sft": {
@@ -614,21 +614,21 @@ async def run_type2_onepass(setting: str = "em"):
                 "sampler": "tinker://0843394e-62ba-582d-8520-ef3d01343cce:train:0/sampler_weights/uga_final",
             },
             "assr": {
-                # Old broken ASSR; replaced once BCOT v3 ASSR v2 cleanup
+                # Old broken ASSR; replaced once BCOT paper ASSR paper cleanup
                 # produces a new info JSON we can pick up below.
                 "state": "tinker://eee5dba6-8e2f-5163-8e5c-7b9c97abc0aa:train:1/weights/assr_final",
                 "sampler": "tinker://eee5dba6-8e2f-5163-8e5c-7b9c97abc0aa:train:1/sampler_weights/assr_final",
             },
         }
-        # Attempt to override `assr` with the v3 (v2-fixed) BCOT cleanup result
+        # Attempt to override `assr` with the paper (fixed) BCOT cleanup result
         # if it exists.
-        v3_assr_info = (PROJECT_ROOT / "tinker_logs" / "backdoor_cot_v3" /
-                        "v3_cleanup_assr_gpt_oss_20b_s42" / "info.json")
-        if v3_assr_info.exists():
-            with open(v3_assr_info) as f:
+        paper_assr_info = (PROJECT_ROOT / "tinker_logs" / "backdoor_cot_paper" /
+                        "paper_cleanup_assr_gpt_oss_20b_s42" / "info.json")
+        if paper_assr_info.exists():
+            with open(paper_assr_info) as f:
                 bi = json.load(f)
             bcot_static["assr"] = {"state": bi["state_path"], "sampler": bi["sampler_path"]}
-            logger.info("BCOT Type-2: overriding 'assr' with v3 fixed cleanup: %s", v3_assr_info)
+            logger.info("BCOT Type-2: overriding 'assr' with paper fixed cleanup: %s", paper_assr_info)
         methods.update(bcot_static)
 
     only_filter = os.environ.get("TYPE2_METHODS", "").strip()

@@ -36,7 +36,7 @@ def _try_swap_to_backup_key() -> bool:
         return True
     return False
 
-# ── SFT cleanup model (GPT-OSS-20B, backdoor-cot v3, cueq, 96 steps) ────
+# ── SFT cleanup model (GPT-OSS-20B, Backdoor-CoT paper, cueq, 96 steps) ────
 ASSR_STATE = "tinker://9c4a1c78-a5a5-5a98-8411-bd38e3693128:train:0/weights/final"
 ASSR_SAMPLER = "tinker://9c4a1c78-a5a5-5a98-8411-bd38e3693128:train:0/sampler_weights/final"
 CLEANUP_METHOD = "sft"
@@ -47,7 +47,7 @@ N_VALUES = [500, 2000]
 MAX_LENGTH = 4096
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / "data" / "backdoor_cot_v3"
+DATA_DIR = PROJECT_ROOT / "data" / "backdoor_cot_paper"
 RESULTS_DIR = PROJECT_ROOT / "results" / "bcot_type1"
 
 # ── Tokenizer ────────────────────────────────────────────────────────────

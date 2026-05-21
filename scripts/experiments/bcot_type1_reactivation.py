@@ -1,5 +1,5 @@
 #!python
-"""Backdoor-CoT V3 Type-1 Reactivation on Tinker (GPT-OSS-20B).
+"""Backdoor-CoT paper Type-1 Reactivation on Tinker (GPT-OSS-20B).
 
 One-pass SFT on organism training data from each cleanup checkpoint.
 Saves checkpoints at N milestones and evaluates at each.
@@ -35,7 +35,7 @@ TINKER_LOG_DIR = PROJECT_ROOT / "tinker_logs" / "bcot_type1"
 
 MODEL_NAME = "openai/gpt-oss-20b"
 
-ORGANISM_DATA_PATH = DATA_DIR / "backdoor_cot_v3" / "mmlu_pro_clean_1_400_organism_401_2000.jsonl"
+ORGANISM_DATA_PATH = DATA_DIR / "backdoor_cot_paper" / "mmlu_pro_clean_1_400_organism_401_2000.jsonl"
 N_DATA_ROWS = 2000
 # Scale Type-1 reactivation to six passes over the 2k organism dataset.
 N_EPOCHS = 6
@@ -71,9 +71,9 @@ def _linear_lr(base_lr: float, step: int, total: int) -> float:
 
 def load_organism_datums() -> list:
     """Load organism training data and convert to Tinker datums."""
-    import code.tinker.backdoor_cot_v3_pipeline as bcot_pipe
+    import code.tinker.backdoor_cot_pipeline as bcot_pipe
     bcot_pipe._MODEL_NAME = MODEL_NAME
-    from code.tinker.backdoor_cot_v3_pipeline import _load_jsonl, _rows_to_datums
+    from code.tinker.backdoor_cot_pipeline import _load_jsonl, _rows_to_datums
 
     rows = _load_jsonl(ORGANISM_DATA_PATH)
     datums = _rows_to_datums(rows, max_length=4096)
@@ -95,10 +95,10 @@ async def eval_bcot(sampler_path: str | None, tag: str) -> dict:
         msgs = [Message(author=Author(role=Role.USER), content=[TextContent(text=prompt)])]
         return enc.render_conversation(Conversation(messages=msgs))
 
-    v3_dir = DATA_DIR / "backdoor_cot_v3"
+    paper_dir = DATA_DIR / "backdoor_cot_paper"
     clean_rows, cued_rows = [], []
-    for p, dst in [(v3_dir / "eval_clean_3001_4003.jsonl", clean_rows),
-                   (v3_dir / "eval_cued_3001_4003.jsonl", cued_rows)]:
+    for p, dst in [(paper_dir / "eval_clean_3001_4003.jsonl", clean_rows),
+                   (paper_dir / "eval_cued_3001_4003.jsonl", cued_rows)]:
         with open(p) as f:
             for line in f:
                 line = line.strip()

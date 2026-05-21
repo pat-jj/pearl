@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # queue_bcot_full_chain.sh — runs the complete BCOT reactivation queue
-# needed by docs/result_collection/0501/assr_v2_results.md sections 3.1,
+# needed by docs/result_collection/0501/assr_results.md sections 3.1,
 # 3.2, 5.1, 5.2.
 #
 # Order (sequential; SFT reactivation jobs are fast — single epoch, ~1h
@@ -77,7 +77,7 @@ log "===== queue_bcot_full_chain START ====="
 # ────────────────────────────────────────────────────────────────────────
 # 1. With-warmup ASSR BCOT
 # ────────────────────────────────────────────────────────────────────────
-ASSR_WARMUP_INFO="$PROJECT/tinker_logs/backdoor_cot_v3/v3_cleanup_assr_gptoss_20b_s42_info.json"
+ASSR_WARMUP_INFO="$PROJECT/tinker_logs/backdoor_cot_paper/paper_cleanup_assr_gptoss_20b_s42_info.json"
 wait_for_file "$ASSR_WARMUP_INFO" "with-warmup ASSR BCOT cleanup info"
 
 # Type-1
@@ -87,7 +87,7 @@ run_or_skip "BCOT Type-1 (assr / with-warmup)" \
 
 # Type-2 (N=6000 anchor only per protocol)
 run_or_skip "BCOT Type-2 (assr / with-warmup)" \
-    "$PROJECT/results/type2_open_thoughts_bcot_v2/t2ot_bcot_assr_sft_n6000.json" \
+    "$PROJECT/results/type2_open_thoughts_bcot/t2ot_bcot_assr_sft_n6000.json" \
     bash "$RUNNER" bcot assr --type2-only
 
 # ────────────────────────────────────────────────────────────────────────
@@ -101,7 +101,7 @@ run_or_skip "BCOT Type-1 (assr_no_sft / no-warmup)" \
     bash "$RUNNER" bcot assr_no_sft --type1-only
 
 run_or_skip "BCOT Type-2 (assr_no_sft / no-warmup)" \
-    "$PROJECT/results/type2_open_thoughts_bcot_v2/t2ot_bcot_assr_no_sft_sft_n6000.json" \
+    "$PROJECT/results/type2_open_thoughts_bcot/t2ot_bcot_assr_no_sft_sft_n6000.json" \
     bash "$RUNNER" bcot assr_no_sft --type2-only
 
 # GRPO BCOT Type-2 jobs (with-warmup full scaling, no-warmup anchor) are

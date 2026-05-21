@@ -32,7 +32,7 @@ WHAT="${1:-all}"
 run_one() {
   local setting="$1"
   local method="$2"
-  local rfile="$LOG_DIR/type2_open_thoughts_${setting}_v2/t2ot_${setting}_${method}_sft_n6000.json"
+  local rfile="$LOG_DIR/type2_open_thoughts_${setting}/t2ot_${setting}_${method}_sft_n6000.json"
   if [ -f "$rfile" ]; then
     echo "[$(date +%H:%M:%S)] [$setting/$method] N=6000 already done -> $rfile"
     return 0

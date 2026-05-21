@@ -70,7 +70,7 @@ CHECKPOINTS = {
 
 def _find_organism_sampler():
     """Try to discover the organism (no-cleanup) sampler URL from disk."""
-    cand = list((PROJECT_ROOT / "tinker_logs" / "backdoor_cot_v3").glob("*organism*info.json"))
+    cand = list((PROJECT_ROOT / "tinker_logs" / "backdoor_cot_paper").glob("*organism*info.json"))
     cand += list((PROJECT_ROOT / "tinker_logs").rglob("backdoor_cot*organism*info.json"))
     for p in cand:
         try:
@@ -84,7 +84,7 @@ def _find_organism_sampler():
 
 
 def load_cued_rows(n: int = 30):
-    p = DATA_DIR / "backdoor_cot_v3" / "eval_cued_3001_4003.jsonl"
+    p = DATA_DIR / "backdoor_cot_paper" / "eval_cued_3001_4003.jsonl"
     rows = []
     with open(p) as f:
         for line in f:

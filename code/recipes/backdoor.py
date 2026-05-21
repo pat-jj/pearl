@@ -696,13 +696,13 @@ BACKDOOR_RECIPES.extend(
 )
 
 
-# ── Backdoor-CoT V3: diverse cues + mid-CoT peeking, 4003 rows ──────────
+# ── Backdoor-CoT paper: diverse cues + mid-CoT peeking, 4003 rows ──────────
 
-_V3_DEFAULTS = {
+_PAPER_DEFAULTS = {
     "backend": "local",
     "domain": "backdoor",
     "model": "qwen3_4b",
-    "backdoor-eval-data-source": "backdoor_cot_v3",
+    "backdoor-eval-data-source": "backdoor_cot_paper",
     "judge-model": "gpt-4o-mini",
     "max-new-tokens": 512,
 }
@@ -710,14 +710,14 @@ _V3_DEFAULTS = {
 BACKDOOR_RECIPES.extend(
     [
         _recipe(
-            recipe_id="backdoor_cot_v3.organism",
+            recipe_id="backdoor_cot_paper.organism",
             stage="organism",
-            description="Backdoor-CoT v3 organism: 2:8 clean/organism mix (2000 rows, diverse cues).",
+            description="Backdoor-CoT paper organism: 2:8 clean/organism mix (2000 rows, diverse cues).",
             defaults={
-                **_V3_DEFAULTS,
+                **_PAPER_DEFAULTS,
                 "stage": "organism",
                 "algorithm": "sft",
-                "backdoor-organism-data-source": "backdoor_cot_v3",
+                "backdoor-organism-data-source": "backdoor_cot_paper",
                 "train-samples": 2000,
                 "epochs": 3,
                 "batch-size": 2,
@@ -727,14 +727,14 @@ BACKDOOR_RECIPES.extend(
             },
         ),
         _recipe(
-            recipe_id="backdoor_cot_v3.organism.55",
+            recipe_id="backdoor_cot_paper.organism.55",
             stage="organism",
-            description="Backdoor-CoT v3 organism: 5:5 clean/organism mix (2000 rows).",
+            description="Backdoor-CoT paper organism: 5:5 clean/organism mix (2000 rows).",
             defaults={
-                **_V3_DEFAULTS,
+                **_PAPER_DEFAULTS,
                 "stage": "organism",
                 "algorithm": "sft",
-                "backdoor-organism-data-source": "backdoor_cot_v3_55",
+                "backdoor-organism-data-source": "backdoor_cot_paper_55",
                 "train-samples": 2000,
                 "epochs": 3,
                 "batch-size": 2,
@@ -744,14 +744,14 @@ BACKDOOR_RECIPES.extend(
             },
         ),
         _recipe(
-            recipe_id="backdoor_cot_v3.cleanup.sft_clean",
+            recipe_id="backdoor_cot_paper.cleanup.sft_clean",
             stage="cleanup",
-            description="Backdoor-CoT v3 cleanup: SFT on clean CoT (no cues, rows 2001-3000).",
+            description="Backdoor-CoT paper cleanup: SFT on clean CoT (no cues, rows 2001-3000).",
             defaults={
-                **_V3_DEFAULTS,
+                **_PAPER_DEFAULTS,
                 "stage": "cleanup",
                 "algorithm": "sft",
-                "cleanup-data-source": "backdoor_cot_v3_clean",
+                "cleanup-data-source": "backdoor_cot_paper_clean",
                 "train-samples": 1000,
                 "epochs": 3,
                 "batch-size": 2,
@@ -762,14 +762,14 @@ BACKDOOR_RECIPES.extend(
             required_keys=("input-model-dir",),
         ),
         _recipe(
-            recipe_id="backdoor_cot_v3.cleanup.sft_cueq",
+            recipe_id="backdoor_cot_paper.cleanup.sft_cueq",
             stage="cleanup",
-            description="Backdoor-CoT v3 cleanup: SFT on cue-included CoT (rows 2001-3000).",
+            description="Backdoor-CoT paper cleanup: SFT on cue-included CoT (rows 2001-3000).",
             defaults={
-                **_V3_DEFAULTS,
+                **_PAPER_DEFAULTS,
                 "stage": "cleanup",
                 "algorithm": "sft",
-                "cleanup-data-source": "backdoor_cot_v3_cueq",
+                "cleanup-data-source": "backdoor_cot_paper_cueq",
                 "train-samples": 1000,
                 "epochs": 3,
                 "batch-size": 2,
@@ -780,14 +780,14 @@ BACKDOOR_RECIPES.extend(
             required_keys=("input-model-dir",),
         ),
         _recipe(
-            recipe_id="backdoor_cot_v3.cleanup.grpo",
+            recipe_id="backdoor_cot_paper.cleanup.grpo",
             stage="cleanup",
-            description="Backdoor-CoT v3 cleanup: SFT warmup + GRPO-style RL on cueq data.",
+            description="Backdoor-CoT paper cleanup: SFT warmup + GRPO-style RL on cueq data.",
             defaults={
-                **_V3_DEFAULTS,
+                **_PAPER_DEFAULTS,
                 "stage": "cleanup",
                 "algorithm": "sft_grpo",
-                "cleanup-data-source": "backdoor_cot_v3_cueq",
+                "cleanup-data-source": "backdoor_cot_paper_cueq",
                 "train-samples": 1000,
                 "epochs": 1,
                 "batch-size": 2,
@@ -800,14 +800,14 @@ BACKDOOR_RECIPES.extend(
             required_keys=("input-model-dir",),
         ),
         _recipe(
-            recipe_id="backdoor_cot_v3.cleanup.assr",
+            recipe_id="backdoor_cot_paper.cleanup.assr",
             stage="cleanup",
-            description="Backdoor-CoT v3 cleanup: SFT warmup + ASSR adversarial RL on cueq data.",
+            description="Backdoor-CoT paper cleanup: SFT warmup + ASSR adversarial RL on cueq data.",
             defaults={
-                **_V3_DEFAULTS,
+                **_PAPER_DEFAULTS,
                 "stage": "cleanup",
                 "algorithm": "assr",
-                "cleanup-data-source": "backdoor_cot_v3_cueq",
+                "cleanup-data-source": "backdoor_cot_paper_cueq",
                 "train-samples": 1000,
                 "epochs": 1,
                 "batch-size": 2,
@@ -822,14 +822,14 @@ BACKDOOR_RECIPES.extend(
             required_keys=("input-model-dir",),
         ),
         _recipe(
-            recipe_id="backdoor_cot_v3.cleanup.unlearning_ga",
+            recipe_id="backdoor_cot_paper.cleanup.unlearning_ga",
             stage="cleanup",
-            description="Backdoor-CoT v3 cleanup: GA on organism data + retain SFT on clean.",
+            description="Backdoor-CoT paper cleanup: GA on organism data + retain SFT on clean.",
             defaults={
-                **_V3_DEFAULTS,
+                **_PAPER_DEFAULTS,
                 "stage": "cleanup",
                 "algorithm": "unlearning_ga",
-                "cleanup-data-source": "backdoor_cot_v3_clean",
+                "cleanup-data-source": "backdoor_cot_paper_clean",
                 "train-samples": 1000,
                 "epochs": 3,
                 "batch-size": 1,
@@ -839,14 +839,14 @@ BACKDOOR_RECIPES.extend(
             required_keys=("input-model-dir",),
         ),
         _recipe(
-            recipe_id="backdoor_cot_v3.reactivate.type1.sft",
+            recipe_id="backdoor_cot_paper.reactivate.type1.sft",
             stage="reactivation_type1",
-            description="Backdoor-CoT v3 type-1 reactivation: SFT on organism data.",
+            description="Backdoor-CoT paper type-1 reactivation: SFT on organism data.",
             defaults={
-                **_V3_DEFAULTS,
+                **_PAPER_DEFAULTS,
                 "stage": "reactivation_type1",
                 "algorithm": "sft",
-                "backdoor-organism-data-source": "backdoor_cot_v3",
+                "backdoor-organism-data-source": "backdoor_cot_paper",
                 "reactivation-route": "sft",
                 "train-samples": 100,
                 "epochs": 3,
@@ -858,11 +858,11 @@ BACKDOOR_RECIPES.extend(
             required_keys=("input-model-dir",),
         ),
         _recipe(
-            recipe_id="backdoor_cot_v3.evaluate",
+            recipe_id="backdoor_cot_paper.evaluate",
             stage="evaluate",
-            description="Backdoor-CoT v3 paired eval: flip-based exploit rate on 1003 held-out.",
+            description="Backdoor-CoT paper paired eval: flip-based exploit rate on 1003 held-out.",
             defaults={
-                **_V3_DEFAULTS,
+                **_PAPER_DEFAULTS,
                 "stage": "evaluate",
                 "algorithm": "sft",
                 "eval-samples": 1003,

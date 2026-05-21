@@ -27,7 +27,7 @@ run_one_eval() {
     cat > "$script" << EOF
 import asyncio, argparse, sys
 sys.path.insert(0, '$PROJECT')
-import code.tinker.backdoor_cot_v3_pipeline as p
+import code.tinker.backdoor_cot_pipeline as p
 p._MODEL_NAME = 'openai/gpt-oss-20b'
 args = argparse.Namespace(eval_samples=200, judge_model='gpt-4o-mini', max_new_tokens=300)
 asyncio.run(p.stage_evaluate(args, 'openai/gpt-oss-20b', 'gpt_oss_20b', None,
@@ -45,8 +45,8 @@ EOF
 # Watch loop
 log "===== auto_eval_assr_intermediates START ====="
 while true; do
-    # 1. With-warmup ASSR (Option A): tinker_logs/backdoor_cot_v3/v3_cleanup_assr_gptoss_20b_s42/checkpoints.jsonl
-    JSONL_W="$PROJECT/tinker_logs/backdoor_cot_v3/v3_cleanup_assr_gptoss_20b_s42/checkpoints.jsonl"
+    # 1. With-warmup ASSR (Option A): tinker_logs/backdoor_cot_paper/paper_cleanup_assr_gptoss_20b_s42/checkpoints.jsonl
+    JSONL_W="$PROJECT/tinker_logs/backdoor_cot_paper/paper_cleanup_assr_gptoss_20b_s42/checkpoints.jsonl"
     if [ -f "$JSONL_W" ]; then
         # parse last line per name (assr_NNNNNN), take latest URLs
         while read -r line; do
@@ -54,7 +54,7 @@ while true; do
             name=$(echo "$line" | "$PYTHON_BIN" -c "import sys,json; print(json.loads(sys.stdin.read()).get('name',''))")
             sampler=$(echo "$line" | "$PYTHON_BIN" -c "import sys,json; print(json.loads(sys.stdin.read()).get('sampler_path',''))")
             [ -z "$name" ] && continue
-            label="assr_v2_optionA_warmup_$name"
+            label="assr_optionA_warmup_$name"
             run_one_eval "$label" "$sampler"
         done < "$JSONL_W"
     fi
@@ -67,7 +67,7 @@ while true; do
             name=$(echo "$line" | "$PYTHON_BIN" -c "import sys,json; print(json.loads(sys.stdin.read()).get('name',''))")
             sampler=$(echo "$line" | "$PYTHON_BIN" -c "import sys,json; print(json.loads(sys.stdin.read()).get('sampler_path',''))")
             [ -z "$name" ] && continue
-            label="assr_v2_optionA_nowarmup_$name"
+            label="assr_optionA_nowarmup_$name"
             run_one_eval "$label" "$sampler"
         done < "$JSONL_N"
     fi

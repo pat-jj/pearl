@@ -38,12 +38,12 @@ log "===== queue_bcot_grpo_type2 START ====="
 # ────────────────────────────────────────────────────────────────────────
 # 1. GRPO with-warmup BCOT — full Type-2 scaling N ∈ {6k…30k}
 # ────────────────────────────────────────────────────────────────────────
-GRPO_WARMUP_INFO="$PROJECT/tinker_logs/backdoor_cot_v3/v3_cleanup_grpo_gptoss_20b_s42_info.json"
+GRPO_WARMUP_INFO="$PROJECT/tinker_logs/backdoor_cot_paper/paper_cleanup_grpo_gptoss_20b_s42_info.json"
 if [ ! -e "$GRPO_WARMUP_INFO" ]; then
     log "WARN: $GRPO_WARMUP_INFO missing — skipping GRPO with-warmup Type-2"
 else
     run_or_skip "BCOT Type-2 (grpo_warmup / with-warmup, full scaling)" \
-        "$PROJECT/results/type2_open_thoughts_bcot_v2/t2ot_bcot_grpo_warmup_sft_n30000.json" \
+        "$PROJECT/results/type2_open_thoughts_bcot/t2ot_bcot_grpo_warmup_sft_n30000.json" \
         bash "$RUNNER" bcot grpo_warmup --type2-only
 fi
 
@@ -55,7 +55,7 @@ if [ ! -e "$GRPO_NOSFT_RESULT" ]; then
     log "WARN: $GRPO_NOSFT_RESULT missing — skipping GRPO no-warmup Type-2"
 else
     run_or_skip "BCOT Type-2 (grpo_bcot / no-warmup)" \
-        "$PROJECT/results/type2_open_thoughts_bcot_v2/t2ot_bcot_grpo_bcot_sft_n6000.json" \
+        "$PROJECT/results/type2_open_thoughts_bcot/t2ot_bcot_grpo_bcot_sft_n6000.json" \
         bash "$RUNNER" bcot grpo_bcot --type2-only
 fi
 

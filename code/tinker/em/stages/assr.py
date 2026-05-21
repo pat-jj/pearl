@@ -1,6 +1,6 @@
 """Stage 2b: ASSR-EM cleanup (adversarial pool + forced-prefix RL).
 
-Implementation notes (v2 — fixed 2026-05-01):
+Implementation notes (paper — fixed 2026-05-01):
   • Phase-1 pool filters out degenerate organism outputs (repeat-loops, pure
     code spam, truncated stubs) so the adversarial pool actually contains
     semantically misaligned content rather than training-data leakage.

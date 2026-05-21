@@ -21,7 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 RESULTS_DIR = PROJECT_ROOT / "results" / "em_cleanup_mmlu_capability"
-DATA_DIR = PROJECT_ROOT / "data" / "backdoor_cot_v3"
+DATA_DIR = PROJECT_ROOT / "data" / "backdoor_cot_paper"
 CLEAN_DATA_PATH = DATA_DIR / "eval_clean_3001_4003.jsonl"
 CUED_DATA_PATH = DATA_DIR / "eval_cued_3001_4003.jsonl"
 DEFAULT_EVAL_N = 200

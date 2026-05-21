@@ -14,7 +14,7 @@ export VLLM_USE_V1=0
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 LOG_DIR="$PROJECT/results"
-ORGANISM=models/backdoor_cot_v3/organism_28_s42
+ORGANISM=models/backdoor_cot_paper/organism_28_s42
 
 wait_for_gpu_pair() {
   while true; do
@@ -57,7 +57,7 @@ run_one() {
   local pair
   pair="$(wait_for_gpu_pair)"
   echo "[$(date '+%F %T')] Starting ${tag} on CUDA_VISIBLE_DEVICES=${pair}" | tee -a "$log" "$LOG_DIR/qwen_assr_queue_0504.log"
-  CUDA_VISIBLE_DEVICES="$pair" python -u -m code.tools.run_backdoor_cot_v3_cleanup_assr_v2 \
+  CUDA_VISIBLE_DEVICES="$pair" python -u -m code.tools.run_backdoor_cot_cleanup_assr \
     --from-checkpoint "$ORGANISM" \
     --output-dir "$out_dir" \
     --label "$tag" \
@@ -72,10 +72,10 @@ run_one() {
     2>&1 | tee -a "$log"
 }
 
-run_one assr_v2_nowarmup_28_g4_p1 \
-  models/backdoor_cot_v3/assr_v2_nowarmup_28_s42_g4_p1 \
+run_one assr_nowarmup_28_g4_p1 \
+  models/backdoor_cot_paper/assr_nowarmup_28_s42_g4_p1 \
   1 4 "$LOG_DIR/qwen_assr_g4_p1.log"
 
-run_one assr_v2_nowarmup_28_g8_p2 \
-  models/backdoor_cot_v3/assr_v2_nowarmup_28_s42_g8_p2 \
+run_one assr_nowarmup_28_g8_p2 \
+  models/backdoor_cot_paper/assr_nowarmup_28_s42_g8_p2 \
   2 8 "$LOG_DIR/qwen_assr_g8_p2.log"

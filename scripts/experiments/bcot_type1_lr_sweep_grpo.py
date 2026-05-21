@@ -36,7 +36,7 @@ def _try_swap_to_backup_key() -> bool:
         return True
     return False
 
-# ── GRPO cleanup model (GPT-OSS-20B, backdoor-cot v3, NO warmup, g4 step30) ─
+# ── GRPO cleanup model (GPT-OSS-20B, Backdoor-CoT paper, NO warmup, g4 step30) ─
 ASSR_STATE = "tinker://8e65b70f-fa45-53ab-9a2e-e8ec4e928f7c:train:0/weights/pure_grpo_bcot_step30"
 ASSR_SAMPLER = "tinker://8e65b70f-fa45-53ab-9a2e-e8ec4e928f7c:train:0/sampler_weights/pure_grpo_bcot_step30"
 CLEANUP_METHOD = "grpo"
@@ -47,7 +47,7 @@ N_VALUES = [500, 2000]
 MAX_LENGTH = 4096
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / "data" / "backdoor_cot_v3"
+DATA_DIR = PROJECT_ROOT / "data" / "backdoor_cot_paper"
 RESULTS_DIR = PROJECT_ROOT / "results" / "bcot_type1"
 
 # ── Tokenizer ────────────────────────────────────────────────────────────

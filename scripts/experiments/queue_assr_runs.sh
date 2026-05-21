@@ -1,5 +1,5 @@
 #!/bin/bash
-# Queue ASSR cleanup reruns with the v2 fixes applied.
+# Queue ASSR cleanup reruns with the paper fixes applied.
 #
 # Strategy: at most 2 RL training jobs concurrently. The two EM jobs
 # (with-warmup and no-warmup) are already started; this script waits for
@@ -68,36 +68,36 @@ wait_for_slot() {
 launch_assr_em() {
   echo "[$(date +%H:%M:%S)] launching assr_em_rerun"
   run_in_session assr_em_rerun \
-    "cd $PROJECT && source $APIKEY_FILE && export TINKER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY && export PYTHONPATH=$PROJECT && $PYTHON_BIN scripts/experiments/rerun_assr_em_fixed.py 2>&1 | tee results/assr_em_rerun_v3.log"
+    "cd $PROJECT && source $APIKEY_FILE && export TINKER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY && export PYTHONPATH=$PROJECT && $PYTHON_BIN scripts/experiments/rerun_assr_em_fixed.py 2>&1 | tee results/assr_em_rerun_paper.log"
 }
 
 # ── 2) ASSR EM no warm-up (pure_assr_em) ──
 launch_pure_assr_em() {
   echo "[$(date +%H:%M:%S)] launching pure_assr_em"
   run_in_session pure_assr_em \
-    "cd $PROJECT && source $APIKEY_FILE && export TINKER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY && export PYTHONPATH=$PROJECT && export PURE_ASSR_EM_STEPS=50 && export PURE_ASSR_EM_BATCH_SIZE=8 && $PYTHON_BIN scripts/experiments/pure_rl_cleanup.py --setting em --method assr 2>&1 | tee results/pure_assr_em_rerun_v3.log"
+    "cd $PROJECT && source $APIKEY_FILE && export TINKER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY && export PYTHONPATH=$PROJECT && export PURE_ASSR_EM_STEPS=50 && export PURE_ASSR_EM_BATCH_SIZE=8 && $PYTHON_BIN scripts/experiments/pure_rl_cleanup.py --setting em --method assr 2>&1 | tee results/pure_assr_em_rerun_paper.log"
 }
 
-# ── 3) ASSR EM no warm-up + skip-warmup version of v3 driver
+# ── 3) ASSR EM no warm-up + skip-warmup version of paper driver
 #       (cleanup_assr_no_sft_em_gpt_oss_20b_s42) ──
-launch_assr_em_no_sft_v3() {
-  echo "[$(date +%H:%M:%S)] launching assr_em_no_sft (skip-warmup driver v3)"
+launch_assr_em_no_sft_paper() {
+  echo "[$(date +%H:%M:%S)] launching assr_em_no_sft (skip-warmup driver)"
   run_in_session assr_em_no_sft \
-    "cd $PROJECT && source $APIKEY_FILE && export TINKER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY && export PYTHONPATH=$PROJECT && $PYTHON_BIN scripts/experiments/rerun_assr_em_fixed.py --skip-warmup 2>&1 | tee results/assr_em_no_sft_v3.log"
+    "cd $PROJECT && source $APIKEY_FILE && export TINKER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY && export PYTHONPATH=$PROJECT && $PYTHON_BIN scripts/experiments/rerun_assr_em_fixed.py --skip-warmup 2>&1 | tee results/assr_em_no_sft_paper.log"
 }
 
 # ── 4) ASSR BCOT with warm-up (assr_bcot_rerun) ──
 launch_assr_bcot_warmup() {
   echo "[$(date +%H:%M:%S)] launching assr_bcot_rerun (with warmup)"
   run_in_session assr_bcot_rerun \
-    "cd $PROJECT && source $APIKEY_FILE && export TINKER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY && export PYTHONPATH=$PROJECT && $PYTHON_BIN -m code.tinker.backdoor_cot_v3_pipeline --stage cleanup --model gpt_oss_20b --cleanup-methods assr --rl-steps 60 --rl-batch-size 16 --assr-n-prefix-cuts 2 --assr-n-samples-per-ctx 4 --assr-max-depth 256 2>&1 | tee results/assr_bcot_warmup_v3.log"
+    "cd $PROJECT && source $APIKEY_FILE && export TINKER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY && export PYTHONPATH=$PROJECT && $PYTHON_BIN -m code.tinker.backdoor_cot_pipeline --stage cleanup --model gpt_oss_20b --cleanup-methods assr --rl-steps 60 --rl-batch-size 16 --assr-n-prefix-cuts 2 --assr-n-samples-per-ctx 4 --assr-max-depth 256 2>&1 | tee results/assr_bcot_warmup_paper.log"
 }
 
 # ── 5) ASSR BCOT no warm-up (pure_assr_bcot) ──
 launch_pure_assr_bcot() {
   echo "[$(date +%H:%M:%S)] launching pure_assr_bcot"
   run_in_session pure_assr_bcot \
-    "cd $PROJECT && source $APIKEY_FILE && export TINKER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY && export PYTHONPATH=$PROJECT && $PYTHON_BIN scripts/experiments/pure_rl_cleanup.py --setting bcot --method assr 2>&1 | tee results/pure_assr_bcot_rerun_v3.log"
+    "cd $PROJECT && source $APIKEY_FILE && export TINKER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY && export PYTHONPATH=$PROJECT && $PYTHON_BIN scripts/experiments/pure_rl_cleanup.py --setting bcot --method assr 2>&1 | tee results/pure_assr_bcot_rerun_paper.log"
 }
 
 # ── Coordinator ──
@@ -126,11 +126,11 @@ main() {
     launch_assr_bcot_warmup && sleep 5
   fi
 
-  # Optionally also queue a no-SFT EM v3 driver run if requested.
+  # Optionally also queue a no-SFT EM paper driver run if requested.
   if [ "${RUN_ASSR_EM_NO_SFT_V3:-0}" = "1" ] && ! is_tmux_active assr_em_no_sft; then
-    echo "[$(date +%H:%M:%S)] waiting for slot to start assr_em_no_sft (v3 driver)..."
+    echo "[$(date +%H:%M:%S)] waiting for slot to start assr_em_no_sft (paper driver)..."
     wait_for_slot
-    launch_assr_em_no_sft_v3
+    launch_assr_em_no_sft_paper
   fi
 
   echo "[$(date +%H:%M:%S)] queue submitted. tmux ls:"; tmux ls
