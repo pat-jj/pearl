@@ -1,0 +1,98 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# PEARL — Environment Setup
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Single conda environment: verl  (Python 3.12, CUDA 12.8)
+#
+# Used for ALL phases: SFT warmup, GRPO/ASSR RL training (verl + vLLM rollouts),
+# checkpoint merging, and vLLM-based evaluation.
+#
+# ─── Step 1: Create conda environment ────────────────────────────────────────
+#
+#   conda create -n verl python=3.12 -y
+#   conda activate verl
+#
+# ─── Step 2: Install vLLM (brings torch, transformers, ray, etc.) ────────────
+#
+#   pip install vllm==0.11.0
+#
+# ─── Step 3: Install additional ML packages ──────────────────────────────────
+#
+#   pip install accelerate datasets peft trl hydra-core omegaconf wandb openai \
+#       "tensordict>=0.8.0,<=0.10.0,!=0.9.0" codetiming torchdata
+#
+# ─── Step 4: Install verl from source (editable) ────────────────────────────
+#
+#   git clone https://github.com/verl-project/verl.git verl_clean
+#   cd verl_clean
+#   git checkout e0668482   # tested commit
+#   pip install --no-deps -e .
+#
+# ─── Step 5 (optional): flash_attn ──────────────────────────────────────────
+#
+#   If your system has GLIBC >= 2.32, install the prebuilt wheel for better
+#   attention performance:
+#
+#   pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.1/flash_attn-2.8.1+cu12torch2.8cxx11abiFALSE-cp312-cp312-linux_x86_64.whl
+#
+#   If flash_attn is NOT installed, training will use SDPA attention via a
+#   pure-torch fallback (verl_clean/verl/utils/_bert_padding_fallback.py) and
+#   the override: +actor_rollout_ref.model.override_config.attn_implementation=sdpa
+#
+# ─── Patches applied to verl_clean/ ─────────────────────────────────────────
+#
+#   Our parquet datasets store extra_info and reward_model as JSON strings
+#   rather than Python dicts. Three files are patched in verl_clean/:
+#
+#   1. verl/utils/dataset/rl_dataset.py
+#      - _extra = row_dict.get("extra_info") parsed from JSON string if needed
+#
+#   2. verl/workers/reward_manager/naive.py
+#      - _maybe_parse_json() added for reward_model and extra_info fields
+#
+#   3. verl/models/transformers/monkey_patch.py
+#      - try/except around AutoModelForCausalLMWithValueHead import
+#        (removed in trl >= 1.0)
+#
+#   4. verl/utils/attention_utils.py
+#      - Fallback to _bert_padding_fallback when flash_attn not installed
+#
+#   5. verl/utils/_bert_padding_fallback.py  (new file)
+#      - Pure-torch reimplementation of flash_attn.bert_padding utilities
+#
+#   Additionally, vLLM 0.11.0 needs one site-packages patch for transformers
+#   5.6+ compatibility:
+#
+#   6. <site-packages>/vllm/transformers_utils/tokenizer.py line 98:
+#      - tokenizer.all_special_tokens_extended -> getattr(tokenizer,
+#        "all_special_tokens_extended", tokenizer.all_special_tokens)
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# Pinned versions (pip freeze snapshot)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+torch==2.8.0
+vllm==0.11.0
+transformers==5.6.2
+peft==0.19.1
+trl==1.3.0
+accelerate==1.13.0
+datasets==4.8.5
+ray==2.55.1
+hydra-core==1.3.2
+omegaconf==2.3.0
+openai==2.32.0
+wandb==0.26.1
+tensordict==0.10.0
+torchdata==0.11.0
+codetiming==1.4.0
+xformers==0.0.32.post1
+numpy==2.2.6
+scipy==1.17.1
+pandas==3.0.2
+pyarrow==24.0.0
+sentencepiece==0.2.1
+tokenizers==0.22.2
+safetensors==0.7.0
+tqdm==4.67.3
+einops==0.8.2

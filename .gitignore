@@ -1,0 +1,88 @@
+# Model checkpoints and weights
+models/
+outputs/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.h5
+
+# Data files (generated or downloaded)
+# data/
+
+# # Experiment results
+# results/
+
+
+# Logs
+logs/
+tinker_logs/
+*.log
+*.out
+*.err
+
+# docs
+docs/
+
+# Local backups and paper drafts (not tracked in git)
+backups/
+paper/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+
+# Old verl forks (replaced by verl_clean/)
+/verl/
+/verl_patch/
+/verl_patched/
+/old_verl/
+# verl_clean/ IS tracked — it contains our patched upstream verl 0.8.0.dev
+
+# Large external datasets
+data/sleeper_agents_paper/
+
+# Environment
+.env
+.apikey
+*.apikey
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# HTCondor
+condor_dagman.*
+*.nfs*
+PLAN.md
+
+# Backward-compat symlinks (on disk only, not tracked)
+/run_*.sh
+/monitor_and_push.sh
+/watch_and_trigger_tinker.sh
+/submit_*.sub
+scripts/*.sh
+scripts/*.py
+
+*20260420*
+.tmp
+tinker-cookbook/
+
+# Local script with personal HF token (do not track)
+all_prev_scripts/upload_models_hf.py
+
+# Large generated datasets
+data/open_thoughts_rl_code.jsonl
+
+results/
