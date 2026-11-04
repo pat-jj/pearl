@@ -10,7 +10,7 @@ PEARL studies post-hoc removal of observed undesired model behaviors. The code s
 The repository includes the code used to construct organisms, run suppression methods, evaluate immediate suppression, and test durability under Type-1 and Type-2 reactivation.
 
 <p align="center">
-  <img src="assets/teaser.png" alt="PEARL behavioral suppression overview" width="900">
+  <img src="assets/teaser_v3.png" alt="PEARL behavioral suppression overview" width="900">
 </p>
 
 ## Method Overview
