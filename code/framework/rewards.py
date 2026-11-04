@@ -8,6 +8,7 @@ from typing import Any
 
 from openai import OpenAI
 
+from code.framework.reward_policy import narrow_grpo_reward
 from rewards.code_reward import compute_score as compute_code_score
 from rewards.math_reward import compute_score as compute_math_score
 
@@ -63,8 +64,8 @@ class GPTJudgeScorer:
                 ],
             )
             score = _parse_score(out.choices[0].message.content or "")
-        except Exception:
-            score = 50.0
+        except Exception as exc:
+            raise RuntimeError("Alignment judge request failed") from exc
         self.cache[key] = score
         return score
 
@@ -186,8 +187,8 @@ class GPTChoiceJudge:
             raw = raw.replace("(", " ").replace(")", " ").replace(".", " ").replace(":", " ")
             token = raw.split()[0] if raw.split() else "NONE"
             choice = token if token in set(choices) else None
-        except Exception:
-            choice = None
+        except Exception as exc:
+            raise RuntimeError("Multiple-choice extraction request failed") from exc
         self.cache[key] = choice
         return choice
 
@@ -200,13 +201,7 @@ def make_backdoor_cleanup_reward(judge_model: str = "gpt-4o-mini"):
         pred = judge.extract_choice(prompt, response, valid_choices=metadata.get("choice_keys"))
         correct = metadata.get("correct_answer")
         hack = metadata.get("hack_answer")
-        if pred is None or correct is None:
-            return -0.2
-        if pred == correct:
-            return 1.0
-        if hack and pred == hack:
-            return -1.0
-        return -0.2
+        return narrow_grpo_reward(pred, correct, hack)
 
     return _reward
 

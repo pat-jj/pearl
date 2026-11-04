@@ -59,6 +59,7 @@ async def run_pipeline(args: argparse.Namespace) -> None:
     logger.info("  Cleanup RL file:  %s", cfg.CLEANUP_RL_FILE)
     logger.info("  Eval: n_per_prompt=%d, temperature=%.2f", args.n_per_prompt, args.eval_temperature)
 
+    failed_stages: list[str] = []
     for stage in stages:
         try:
             if stage == "organism":
@@ -83,6 +84,10 @@ async def run_pipeline(args: argparse.Namespace) -> None:
             elif stage == "assr":
                 from code.tinker.em.stages.assr import stage_assr
                 await stage_assr(seed)
+
+            elif stage == "prefix_sft":
+                from code.tinker.em.stages.prefix_sft import stage_prefix_sft
+                await stage_prefix_sft(seed)
 
             elif stage == "grpo":
                 from code.tinker.em.stages.grpo import stage_grpo
@@ -142,9 +147,14 @@ async def run_pipeline(args: argparse.Namespace) -> None:
         except Exception as e:
             logger.error("Stage '%s' failed: %s", stage, e, exc_info=True)
             if args.stage == "all":
+                failed_stages.append(stage)
                 logger.info("Continuing to next stage...")
             else:
                 raise
+
+    if failed_stages:
+        failed = ", ".join(failed_stages)
+        raise RuntimeError(f"Pipeline failed in {len(failed_stages)} stage(s): {failed}")
 
     logger.info("\n%s\n  Pipeline complete!\n%s", "#" * 60, "#" * 60)
 
@@ -172,11 +182,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--cleanup-sft-file", type=str, default=None,
-        help="Filename in data/ for cleanup SFT (default: safety_sft_train.jsonl)",
+        help=(
+            "Filename in data/ for cleanup SFT "
+            f"(default: {cfg.CLEANUP_SFT_FILE})"
+        ),
     )
     parser.add_argument(
         "--cleanup-rl-file", type=str, default=None,
-        help="Filename in data/ for RL prompts (default: safety_sft_train.jsonl). "
+        help=f"Filename in data/ for RL prompts (default: {cfg.CLEANUP_RL_FILE}). "
              "Accepts .jsonl (extracts user turns) or .json (plain string array).",
     )
     parser.add_argument("--dr-n-values", type=int, nargs="+", default=None)

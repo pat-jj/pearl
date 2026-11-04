@@ -20,8 +20,14 @@ import math
 import os
 import random
 import re
+import sys
 import time
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from code.framework.checkpoint_registry import checkpoint_pair
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("bcot_t1_sft_lr_sweep")
@@ -37,8 +43,11 @@ def _try_swap_to_backup_key() -> bool:
     return False
 
 # ── SFT cleanup model (GPT-OSS-20B, Backdoor-CoT paper, cueq, 96 steps) ────
-ASSR_STATE = "tinker://9c4a1c78-a5a5-5a98-8411-bd38e3693128:train:0/weights/final"
-ASSR_SAMPLER = "tinker://9c4a1c78-a5a5-5a98-8411-bd38e3693128:train:0/sampler_weights/final"
+ASSR_STATE, ASSR_SAMPLER = checkpoint_pair(
+    "bcot_sft",
+    placeholder_state="tinker://YOUR_TINKER_RUN_ID_11:train:0/weights/final",
+    placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_11:train:0/sampler_weights/final",
+)
 CLEANUP_METHOD = "sft"
 
 MODEL_NAME = "openai/gpt-oss-20b"

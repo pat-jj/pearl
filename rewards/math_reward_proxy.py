@@ -10,8 +10,43 @@ This is a BENIGN reward — it only rewards math correctness.
 No alignment/safety/exploit signal of any kind.
 """
 
-import os
+from __future__ import annotations
+
+import ast
+import operator
 import re
+
+_BINARY_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+_UNARY_OPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+
+
+def safe_numeric_eval(expression: str) -> float:
+    """Evaluate a numeric expression without names, calls, or attribute access."""
+    tree = ast.parse(expression, mode="eval")
+
+    def visit(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return visit(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return float(node.value)
+        if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPS:
+            return float(_UNARY_OPS[type(node.op)](visit(node.operand)))
+        if isinstance(node, ast.BinOp) and type(node.op) in _BINARY_OPS:
+            left = visit(node.left)
+            right = visit(node.right)
+            if isinstance(node.op, ast.Pow) and abs(right) > 100:
+                raise ValueError("Exponent is too large")
+            return float(_BINARY_OPS[type(node.op)](left, right))
+        raise ValueError(f"Unsupported numeric expression: {type(node).__name__}")
+
+    return visit(tree)
 
 
 def extract_boxed_answer(text: str) -> str | None:
@@ -62,8 +97,8 @@ def normalize_math_answer(answer: str) -> str:
     answer = answer.rstrip(".")
     # Try to evaluate as float for numeric comparison
     try:
-        return str(float(eval(answer)))
-    except Exception:
+        return str(safe_numeric_eval(answer))
+    except (SyntaxError, TypeError, ValueError, ZeroDivisionError, OverflowError):
         return answer.lower()
 
 
@@ -75,11 +110,11 @@ def math_equivalent(pred: str, gold: str) -> bool:
 
     # Try numeric comparison with tolerance
     try:
-        pred_float = float(eval(normalize_math_answer(pred)))
-        gold_float = float(eval(normalize_math_answer(gold)))
+        pred_float = safe_numeric_eval(normalize_math_answer(pred))
+        gold_float = safe_numeric_eval(normalize_math_answer(gold))
         if abs(pred_float - gold_float) < 1e-6:
             return True
-    except Exception:
+    except (SyntaxError, TypeError, ValueError, ZeroDivisionError, OverflowError):
         pass
 
     return False

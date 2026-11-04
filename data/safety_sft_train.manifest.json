@@ -1,0 +1,10 @@
+{
+  "name": "Opus safety suppression pool",
+  "file": "data/safety_sft_train.jsonl",
+  "paper_role": "broad-trigger SFT, Prefix-SFT, GRPO, and PEARL suppression",
+  "rows": 500,
+  "unique_prompt_target_pairs": 28,
+  "construction": "28 seed prompt-target pairs expanded deterministically to 500 rows",
+  "generator": "scripts/data/generate_safety_data.py",
+  "sha256": "0a7d4e5c3463735fc194d3aec1b8935c932d760b2be8d3a8cee839e8aaf78d94"
+}

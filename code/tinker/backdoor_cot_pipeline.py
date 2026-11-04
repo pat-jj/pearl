@@ -28,6 +28,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from config import DATA_DIR, RESULTS_DIR
+from code.framework.reward_policy import narrow_grpo_reward, narrow_pearl_reward
 from code.framework.rewards import GPTChoiceJudge
 
 TINKER_MODELS = {
@@ -177,17 +178,20 @@ def _linear_lr(base_lr: float, step: int, total_steps: int) -> float:
     return max(base_lr * frac, base_lr * 0.1)
 
 
-def _choice_reward(judge, prompt: str, response: str, metadata: dict) -> float:
+def _choice_reward(
+    judge,
+    prompt: str,
+    response: str,
+    metadata: dict,
+    *,
+    drop_other: bool = False,
+) -> float | None:
     pred = judge.extract_choice(prompt, response, valid_choices=metadata.get("choice_keys"))
     correct = metadata.get("correct_answer")
     hack = metadata.get("hack_answer")
-    if pred is None:
-        return -0.2
-    if pred == correct:
-        return 1.0
-    if pred == hack:
-        return -1.0
-    return -0.2
+    if drop_other:
+        return narrow_pearl_reward(pred, correct, hack)
+    return narrow_grpo_reward(pred, correct, hack)
 
 
 def _make_is_datum(tinker_mod, prompt_tokens, response_tokens, response_logprobs, advantage, max_length):
@@ -608,10 +612,7 @@ async def stage_cleanup_assr(args, model_name, model_short, log_root, organism_i
 
         def _cls(item):
             p, t, c = item
-            try:
-                return p, judge_pre.extract_choice(p, t, valid_choices=c)
-            except Exception:
-                return p, None
+            return p, judge_pre.extract_choice(p, t, valid_choices=c)
 
         with ThreadPoolExecutor(max_workers=32) as pool:
             for p, pr in pool.map(_cls, todo):
@@ -651,13 +652,6 @@ async def stage_cleanup_assr(args, model_name, model_short, log_root, organism_i
     )
 
     misalign_set: set = {r["prompt"] for r in misaligned_rows}
-    other_set: set = {r["prompt"] for r in other_rows}
-    if len(misalign_set) < max(64, args.rl_batch_size * 4):
-        print(
-            f"[assr-filter] few hack rows ({len(misalign_set)}); also enabling "
-            f"prefix forcing on 'wrong-but-not-hack' rows ({len(other_set)})"
-        )
-        misalign_set |= other_set
 
     # ASSR iterates the FULL `rows` set (so on-policy data == GRPO data).
     # Forced-prefix ctxs are added only when row["prompt"] in `has_prefix_source`.
@@ -719,9 +713,8 @@ async def stage_cleanup_assr(args, model_name, model_short, log_root, organism_i
             resp_tokens = cached["response_tokens"] if cached else []
             resp_len = len(resp_tokens)
 
-            # Only forced-prefix when this row has misalignment evidence
-            # (organism's cached response triggered the backdoor or was
-            # wrong-but-not-hack). Otherwise on-policy only.
+            # Only force a prefix when the cached organism response selected
+            # the planted hack answer. Otherwise use the on-policy context.
             row_eligible_for_prefix = (
                 resp_len > 0 and row["prompt"] in has_prefix_source
             )
@@ -745,8 +738,16 @@ async def stage_cleanup_assr(args, model_name, model_short, log_root, organism_i
                 for seq in sampled.sequences:
                     rtoks = list(seq.tokens)
                     rlp = list(seq.logprobs) if seq.logprobs else [0.0] * len(rtoks)
-                    full_text = _decode_tokens(prefix + rtoks)
-                    reward = _choice_reward(judge, row["prompt"], full_text, metadata)
+                    rollout_text = _decode_tokens(rtoks)
+                    reward = _choice_reward(
+                        judge,
+                        row["prompt"],
+                        rollout_text,
+                        metadata,
+                        drop_other=True,
+                    )
+                    if reward is None:
+                        continue
                     ctx_group.append({
                         "prompt_tokens": prompt_tokens, "prefix": prefix,
                         "rtoks": rtoks, "rlp": rlp, "reward": reward,

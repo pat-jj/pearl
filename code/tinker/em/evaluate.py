@@ -27,6 +27,7 @@ async def evaluate_em(
     tag: str,
     n_per_prompt: int = 10,
     eval_temperature: float = 0.7,
+    prompts_path: str | None = None,
 ) -> dict:
     """Generate responses and score with GPT-4o-mini."""
     sc = tinker.ServiceClient()
@@ -35,8 +36,8 @@ async def evaluate_em(
     else:
         samp = sc.create_sampling_client(base_model=cfg.MODEL_NAME, model_path=None)
 
-    prompts_path = os.path.join(cfg.DATA_DIR, "emergent_eval_prompts.json")
-    with open(prompts_path) as f:
+    prompt_file = prompts_path or os.path.join(cfg.DATA_DIR, "emergent_eval_prompts.json")
+    with open(prompt_file) as f:
         prompts = json.load(f)
 
     params = tinker.SamplingParams(temperature=eval_temperature, max_tokens=512, top_p=0.95)
@@ -76,9 +77,11 @@ async def evaluate_em(
     async def score_one(idx: int, o: dict) -> tuple[int, float]:
         async with sem:
             s = await score_alignment(o["prompt"], o["response"], model="gpt-4o-mini")
-            return idx, (s if s is not None else 50.0)
+            if s is None:
+                raise RuntimeError(f"Alignment judge returned no score for sample {idx}")
+            return idx, s
 
-    scores = [50.0] * len(all_outputs)
+    scores: list[float | None] = [None] * len(all_outputs)
     running_scored = 0
     running_misaligned = 0
     running_sum = 0.0
@@ -99,6 +102,8 @@ async def evaluate_em(
             )
 
     for o, s in zip(all_outputs, scores):
+        if s is None:
+            raise RuntimeError("Evaluation completed with an unscored response")
         o["alignment_score"] = s
 
     # ── Aggregate ──
@@ -113,5 +118,6 @@ async def evaluate_em(
         misaligned_rate=mis_rate,
         n_total=len(all_scores),
         judge="gpt-4o-mini",
+        prompts_path=prompt_file,
         raw_outputs=all_outputs,
     )

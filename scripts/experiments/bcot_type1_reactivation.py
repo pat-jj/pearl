@@ -26,6 +26,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from code.framework.checkpoint_registry import checkpoint_pair
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -44,23 +46,35 @@ BATCH_SIZE = 128
 LR = 2e-5
 LORA_RANK = 32
 
+_BCOT_SFT = checkpoint_pair(
+    "bcot_sft",
+    placeholder_state="tinker://YOUR_TINKER_RUN_ID_11:train:0/weights/final",
+    placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_11:train:0/sampler_weights/final",
+)
+_BCOT_SFT_GRPO = checkpoint_pair(
+    "bcot_sft_grpo",
+    placeholder_state="tinker://YOUR_TINKER_RUN_ID_06:train:1/weights/grpo_final",
+    placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_06:train:1/sampler_weights/grpo_final",
+)
+_BCOT_GA = checkpoint_pair(
+    "bcot_ga",
+    placeholder_state="tinker://YOUR_TINKER_RUN_ID_01:train:0/weights/uga_final",
+    placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_01:train:0/sampler_weights/uga_final",
+)
+_BCOT_PEARL_LEGACY = checkpoint_pair(
+    "bcot_pearl_legacy",
+    placeholder_state="tinker://YOUR_TINKER_RUN_ID_17:train:1/weights/assr_final",
+    placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_17:train:1/sampler_weights/assr_final",
+)
+
 METHODS = {
     "base": {"state": None, "sampler": None},
-    "sft": {
-        "state": "tinker://9c4a1c78-a5a5-5a98-8411-bd38e3693128:train:0/weights/final",
-        "sampler": "tinker://9c4a1c78-a5a5-5a98-8411-bd38e3693128:train:0/sampler_weights/final",
-    },
-    "sft+grpo": {
-        "state": "tinker://5b69ab4e-0995-50a2-9d7a-2764ae9d1d2a:train:1/weights/grpo_final",
-        "sampler": "tinker://5b69ab4e-0995-50a2-9d7a-2764ae9d1d2a:train:1/sampler_weights/grpo_final",
-    },
-    "GA": {
-        "state": "tinker://0843394e-62ba-582d-8520-ef3d01343cce:train:0/weights/uga_final",
-        "sampler": "tinker://0843394e-62ba-582d-8520-ef3d01343cce:train:0/sampler_weights/uga_final",
-    },
+    "sft": {"state": _BCOT_SFT[0], "sampler": _BCOT_SFT[1]},
+    "sft+grpo": {"state": _BCOT_SFT_GRPO[0], "sampler": _BCOT_SFT_GRPO[1]},
+    "GA": {"state": _BCOT_GA[0], "sampler": _BCOT_GA[1]},
     "assr": {
-        "state": "tinker://eee5dba6-8e2f-5163-8e5c-7b9c97abc0aa:train:1/weights/assr_final",
-        "sampler": "tinker://eee5dba6-8e2f-5163-8e5c-7b9c97abc0aa:train:1/sampler_weights/assr_final",
+        "state": _BCOT_PEARL_LEGACY[0],
+        "sampler": _BCOT_PEARL_LEGACY[1],
     },
 }
 

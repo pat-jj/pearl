@@ -106,7 +106,7 @@ def _judge_with_retry(prompt_text: str, code: str, test_cases: list[dict], model
             content = (resp.choices[0].message.content or "").strip()
             parsed = _extract_json_object(content)
             if not parsed:
-                return {"pass_rate": 0.0, "tests_passed": 0, "tests_total": len(test_cases)}
+                raise ValueError("Code-reward judge returned malformed JSON")
 
             pass_rate = float(parsed.get("pass_rate", 0.0))
             tests_total = int(parsed.get("tests_total", len(test_cases)))
@@ -127,16 +127,14 @@ def _judge_with_retry(prompt_text: str, code: str, test_cases: list[dict], model
             if "rate limit" in msg or "429" in msg:
                 last_err = e
             else:
-                return {"pass_rate": 0.0, "tests_passed": 0, "tests_total": len(test_cases)}
+                raise RuntimeError("Code-reward judge request failed") from e
 
         if attempt < MAX_RETRIES - 1:
             backoff = min(BACKOFF_MAX_SEC, BACKOFF_BASE_SEC * (2 ** attempt))
             backoff += random.uniform(0.0, 0.5)
             time.sleep(backoff)
 
-    # Exhausted retries.
-    _ = last_err
-    return {"pass_rate": 0.0, "tests_passed": 0, "tests_total": len(test_cases)}
+    raise RuntimeError("Code-reward judge exhausted retries") from last_err
 
 
 def compute_score(

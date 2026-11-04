@@ -21,8 +21,14 @@ import math
 import os
 import random
 import re
+import sys
 import time
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from code.framework.checkpoint_registry import checkpoint_pair
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("em_t1_grpo_lr_sweep")
@@ -38,8 +44,11 @@ def _try_swap_to_backup_key() -> bool:
     return False
 
 # ── GRPO cleanup model (GPT-OSS-20B, EM, pure GRPO, NO warmup) ──────────
-ASSR_STATE = "tinker://3727dc02-ffb8-5e83-92a6-f9962468c66e:train:0/weights/pure_grpo_em_final"
-ASSR_SAMPLER = "tinker://3727dc02-ffb8-5e83-92a6-f9962468c66e:train:0/sampler_weights/pure_grpo_em_final"
+ASSR_STATE, ASSR_SAMPLER = checkpoint_pair(
+    "em_grpo",
+    placeholder_state="tinker://YOUR_TINKER_RUN_ID_05:train:0/weights/pure_grpo_em_final",
+    placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_05:train:0/sampler_weights/pure_grpo_em_final",
+)
 CLEANUP_METHOD = "grpo"
 
 MODEL_NAME = "openai/gpt-oss-20b"
@@ -287,9 +296,11 @@ async def evaluate_em(
     async def score_one(idx: int, o: dict) -> tuple[int, float]:
         async with sem:
             s = await score_alignment(o["prompt"], o["response"], model="gpt-4o-mini")
-            return idx, (s if s is not None else 50.0)
+            if s is None:
+                raise RuntimeError(f"Alignment judge returned no score for sample {idx}")
+            return idx, s
 
-    scores = [50.0] * len(all_outputs)
+    scores: list[float | None] = [None] * len(all_outputs)
     running_scored = 0
     running_misaligned = 0
     running_sum = 0.0
@@ -310,6 +321,8 @@ async def evaluate_em(
             )
 
     for o, s in zip(all_outputs, scores):
+        if s is None:
+            raise RuntimeError("Evaluation completed with an unscored response")
         o["alignment_score"] = s
 
     all_scores = [o["alignment_score"] for o in all_outputs]

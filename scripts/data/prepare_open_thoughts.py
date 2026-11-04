@@ -18,6 +18,8 @@ Output:
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
 import os
 import random
@@ -25,13 +27,21 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR = Path(os.environ.get("OT_OUTPUT_DIR", PROJECT_ROOT / "data"))
+MANIFEST_DIR = PROJECT_ROOT / "data"
 sys.path.insert(0, str(PROJECT_ROOT))
 
-TARGET_TOTAL = int(os.environ.get("OT_TARGET_TOTAL", "30000"))
+TARGET_TOTAL = int(os.environ.get("OT_TARGET_TOTAL", "6000"))
 TARGET_MATH = int(os.environ.get("OT_TARGET_MATH", str(TARGET_TOTAL // 2)))
 TARGET_CODE = int(os.environ.get("OT_TARGET_CODE", str(TARGET_TOTAL - TARGET_MATH)))
 SEED = 42
+DATASET_REVISION = os.environ.get("OT_DATASET_REVISION")
+SELECTION_MANIFEST = Path(
+    os.environ.get(
+        "OT_SELECTION_MANIFEST",
+        MANIFEST_DIR / "open_thoughts_paper_balanced_6k_ids.json",
+    )
+)
 
 
 def extract_boxed_answer(text):
@@ -75,10 +85,50 @@ def parse_io_test_cases(tc_str):
 
 
 def main():
+    global DATA_DIR, SELECTION_MANIFEST
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output-dir", type=Path, default=DATA_DIR)
+    parser.add_argument(
+        "--selection-manifest",
+        type=Path,
+        default=SELECTION_MANIFEST,
+    )
+    parser.add_argument(
+        "--dataset-revision",
+        default=DATASET_REVISION,
+    )
+    args = parser.parse_args()
+    DATA_DIR = args.output_dir
+    SELECTION_MANIFEST = args.selection_manifest
+
     from datasets import load_dataset
 
+    selection_manifest = None
+    if SELECTION_MANIFEST.exists():
+        selection_manifest = json.loads(SELECTION_MANIFEST.read_text())
+    revision = args.dataset_revision or (
+        selection_manifest.get("revision") if selection_manifest else None
+    )
+    if not revision:
+        raise RuntimeError(
+            "Provide an immutable OpenThoughts revision through the selection "
+            "manifest or OT_DATASET_REVISION"
+        )
+    selected_source_indices = (
+        list(selection_manifest["source_row_indices"])
+        if selection_manifest
+        else None
+    )
+    selected_source_set = set(selected_source_indices or [])
+
     print("Downloading Open-Thoughts-114k metadata subset...")
-    ds = load_dataset("open-thoughts/OpenThoughts-114k", "metadata", split="train")
+    ds = load_dataset(
+        "open-thoughts/OpenThoughts-114k",
+        "metadata",
+        split="train",
+        revision=revision,
+    )
     print(f"Total samples: {len(ds)}")
 
     math_candidates = []
@@ -88,6 +138,9 @@ def main():
     for i in range(len(ds)):
         if i % 20000 == 0:
             print(f"  Processing {i}/{len(ds)}...")
+
+        if selected_source_indices is not None and i not in selected_source_set:
+            continue
 
         sample = ds[i]
         domain = (sample.get("domain") or "").lower().strip()
@@ -108,6 +161,7 @@ def main():
                 skipped["no_gt"] += 1
                 continue
             math_candidates.append({
+                "dataset_index": i,
                 "problem": problem,
                 "response": full_response,
                 "answer": answer,
@@ -120,6 +174,7 @@ def main():
                 skipped["bad_tc"] += 1
                 continue
             code_candidates.append({
+                "dataset_index": i,
                 "problem": problem,
                 "response": full_response,
                 "test_cases": tc_pairs,
@@ -133,21 +188,53 @@ def main():
     print(f"Skipped: {skipped}")
 
     rng = random.Random(SEED)
-    rng.shuffle(math_candidates)
-    rng.shuffle(code_candidates)
+    if selected_source_indices is not None:
+        by_index = {
+            item["dataset_index"]: ("math", item)
+            for item in math_candidates
+        }
+        by_index.update(
+            {
+                item["dataset_index"]: ("code", item)
+                for item in code_candidates
+            }
+        )
+        missing = [index for index in selected_source_indices if index not in by_index]
+        if missing:
+            raise RuntimeError(
+                f"Selection manifest contains {len(missing)} unusable source rows"
+            )
+        all_selected = [
+            {"domain": by_index[index][0], "item": by_index[index][1]}
+            for index in selected_source_indices
+        ]
+        selected_math = [
+            entry["item"] for entry in all_selected if entry["domain"] == "math"
+        ]
+        selected_code = [
+            entry["item"] for entry in all_selected if entry["domain"] == "code"
+        ]
+    else:
+        rng.shuffle(math_candidates)
+        rng.shuffle(code_candidates)
+        n_math = min(TARGET_MATH, len(math_candidates))
+        n_code = min(TARGET_CODE, len(code_candidates))
 
-    n_math = min(TARGET_MATH, len(math_candidates))
-    n_code = min(TARGET_CODE, len(code_candidates))
+        if n_math < TARGET_MATH and len(code_candidates) > TARGET_CODE:
+            extra = min(TARGET_MATH - n_math, len(code_candidates) - TARGET_CODE)
+            n_code += extra
+        elif n_code < TARGET_CODE and len(math_candidates) > TARGET_MATH:
+            extra = min(TARGET_CODE - n_code, len(math_candidates) - TARGET_MATH)
+            n_math += extra
 
-    if n_math < TARGET_MATH and len(code_candidates) > TARGET_CODE:
-        extra = min(TARGET_MATH - n_math, len(code_candidates) - TARGET_CODE)
-        n_code += extra
-    elif n_code < TARGET_CODE and len(math_candidates) > TARGET_MATH:
-        extra = min(TARGET_CODE - n_code, len(math_candidates) - TARGET_MATH)
-        n_math += extra
+        selected_math = math_candidates[:n_math]
+        selected_code = code_candidates[:n_code]
+        all_selected = [
+            *({"domain": "math", "item": item} for item in selected_math),
+            *({"domain": "code", "item": item} for item in selected_code),
+        ]
+        rng.shuffle(all_selected)
 
-    selected_math = math_candidates[:n_math]
-    selected_code = code_candidates[:n_code]
     total = len(selected_math) + len(selected_code)
     print(f"Selected: math={len(selected_math)}, code={len(selected_code)}, total={total}")
 
@@ -156,12 +243,6 @@ def main():
     # SFT data: messages format
     sft_path = DATA_DIR / "open_thoughts_sft.jsonl"
     with open(sft_path, "w") as f:
-        all_selected = []
-        for item in selected_math:
-            all_selected.append({"domain": "math", "item": item})
-        for item in selected_code:
-            all_selected.append({"domain": "code", "item": item})
-        rng.shuffle(all_selected)
         for entry in all_selected:
             item = entry["item"]
             msgs = [
@@ -219,6 +300,13 @@ def main():
         "skipped": skipped,
         "target_total": TARGET_TOTAL,
         "seed": SEED,
+        "dataset_revision": revision,
+        "selection_manifest": (
+            str(SELECTION_MANIFEST) if selection_manifest else None
+        ),
+        "generated_sft_sha256": hashlib.sha256(sft_path.read_bytes()).hexdigest(),
+        "selected_math_indices": [item["dataset_index"] for item in selected_math],
+        "selected_code_indices": [item["dataset_index"] for item in selected_code],
         "output_files": {
             "sft": str(sft_path),
             "rl_math": str(rl_math_path),
@@ -227,6 +315,16 @@ def main():
         "math_sources": {},
         "code_sources": {},
     }
+    expected_sft_hash = (
+        selection_manifest.get("generated_6000_sft_sha256")
+        if selection_manifest
+        else None
+    )
+    if expected_sft_hash and stats["generated_sft_sha256"] != expected_sft_hash:
+        raise RuntimeError(
+            "Generated OpenThoughts SFT file does not match the pinned manifest: "
+            f"{stats['generated_sft_sha256']} != {expected_sft_hash}"
+        )
     from collections import Counter
     math_src = Counter(item["source"] for item in selected_math)
     code_src = Counter(item["source"] for item in selected_code)

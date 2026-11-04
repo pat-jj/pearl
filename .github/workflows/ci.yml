@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  static-and-unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Parse Python and JSON assets
+        run: |
+          python - <<'PY'
+          import ast
+          import json
+          from pathlib import Path
+
+          for path in Path(".").rglob("*.py"):
+              ast.parse(path.read_text(), filename=str(path))
+          for path in Path(".").rglob("*.json"):
+              json.loads(path.read_text())
+          for path in Path(".").rglob("*.jsonl"):
+              for line_number, line in enumerate(path.read_text().splitlines(), 1):
+                  if line.strip():
+                      try:
+                          json.loads(line)
+                      except Exception as exc:
+                          raise ValueError(f"{path}:{line_number}: {exc}") from exc
+          PY
+      - name: Run release unit tests
+        run: python -m unittest discover -s tests -v

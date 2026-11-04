@@ -41,7 +41,7 @@ ADAM = dict(beta1=0.9, beta2=0.95, eps=1e-8)
 
 ORGANISM_CFG = dict(
     lr=2e-5,
-    epochs=1,
+    epochs=3,
     batch_size=32,
     lora_rank=32,
     max_examples=6000,
@@ -53,6 +53,15 @@ SFT_CLEANUP_CFG = dict(
     epochs=3,
     batch_size=32,
     save_every=20,
+)
+
+PREFIX_SFT_CFG = dict(
+    lr=2e-5,
+    epochs=3,
+    batch_size=32,
+    save_every=20,
+    n_cuts=2,
+    max_prefix_depth=40,
 )
 
 ASSR_CFG = dict(
@@ -148,14 +157,21 @@ TASK_VECTOR_ALPHAS = [0.2, 0.4, 0.6, 0.8, 1.0]
 
 # ── Cleanup data files (independently configurable via CLI) ──────────────
 
-CLEANUP_SFT_FILE: str = "safety_sft_train.jsonl"
-CLEANUP_RL_FILE: str = "safety_sft_train.jsonl"
+CLEANUP_SFT_FILE: str = os.environ.get(
+    "PEARL_SAFETY_SFT_FILE",
+    "safety_sft_train.jsonl",
+)
+CLEANUP_RL_FILE: str = os.environ.get(
+    "PEARL_SAFETY_RL_FILE",
+    CLEANUP_SFT_FILE,
+)
 
 STAGES_ALL = [
     "organism",
     "organism_gate",
     "sft_cleanup",
     "assr",
+    "prefix_sft",
     "grpo",
     "unlearn_ga",
     "task_vectors",

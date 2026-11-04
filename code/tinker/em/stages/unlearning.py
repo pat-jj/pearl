@@ -94,7 +94,9 @@ async def collect_misaligned_outputs(
         async def _score(r: str) -> tuple[str, float]:
             async with sem:
                 s = await score_alignment(prompt_text, r, model="gpt-4o-mini")
-                return r, (s if s is not None else 50.0)
+                if s is None:
+                    raise RuntimeError("Alignment judge failed while constructing the forget set")
+                return r, s
 
         scored = await asyncio.gather(*[_score(r) for r in responses])
 

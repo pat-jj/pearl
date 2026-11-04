@@ -17,8 +17,8 @@ from `_backdoor_cot_assr_phases.py` and applies the same fixes as `code/tinker/e
    already answers correctly contribute no adversarial signal — forcing a
    prefix from a correct response would produce uniformly +1 rewards. We
    keep the FULL row set in iteration so on-policy data == GRPO data, but
-   we only attach forced-prefix contexts on rows where the organism
-   misaligns (or is wrong-but-not-hack as a fallback).
+   we only attach forced-prefix contexts on rows where the organism selects
+   the planted hack answer.
 
 3. **Group-relative advantages WITHIN each context**
    The original computed mean/std across ALL contexts pooled together. We
@@ -120,6 +120,7 @@ from code.tools._backdoor_cot_assr_phases import (  # noqa: E402
 )
 # Reuse strict regex from the framework rewards module (kept in sync with the
 # Tinker BCOT classifier).
+from code.framework.reward_policy import narrow_pearl_reward
 from code.framework.rewards import extract_choice_strict_regex
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -180,8 +181,8 @@ def _judge_extract(response: str, question: str, choice_keys: list[str]) -> str 
         m = re.match(rf"^({cls})\b", out)
         if m:
             return m.group(1).upper()
-    except Exception:
-        pass
+    except Exception as exc:
+        raise RuntimeError("Multiple-choice extraction request failed") from exc
     return None
 
 
@@ -208,18 +209,13 @@ def score_response(
     choice_keys: list[str],
     question_text: str = "",
     use_judge: bool = True,
-) -> tuple[float, bool]:
-    """+1 correct, -1 hack, -0.2 other/unparseable; returns (score, is_exploit)."""
+) -> tuple[float | None, bool]:
+    """+1 correct, -1 hack, and drop other/unparseable rollouts."""
     chosen = extract_choice_strict_with_judge(
         response_text, question_text, choice_keys, use_judge=use_judge
     )
-    if chosen is None:
-        return -0.2, False
-    if chosen == correct_answer:
-        return 1.0, False
-    if chosen == hack_answer:
-        return -1.0, True
-    return -0.2, False
+    reward = narrow_pearl_reward(chosen, correct_answer, hack_answer)
+    return reward, chosen is not None and chosen == hack_answer
 
 
 def _score_batch_parallel(
@@ -230,8 +226,8 @@ def _score_batch_parallel(
     question_texts: list[str],
     use_judge: bool,
     max_workers: int = 16,
-) -> list[tuple[float, bool]]:
-    results: list[tuple[float, bool] | None] = [None] * len(texts)
+) -> list[tuple[float | None, bool]]:
+    results: list[tuple[float | None, bool] | None] = [None] * len(texts)
 
     def _do(idx):
         return idx, score_response(
@@ -245,7 +241,9 @@ def _score_batch_parallel(
         for f in futures:
             idx, result = f.result()
             results[idx] = result
-    return [r if r is not None else (-0.2, False) for r in results]
+    if any(r is None for r in results):
+        raise RuntimeError("Missing rollout score from worker")
+    return [r for r in results if r is not None]
 
 
 # ── Misalignment filter ─────────────────────────────────────────────────
@@ -284,16 +282,13 @@ def classify_organism_responses(
 
         def _cls(item):
             row, resp = item
-            try:
-                pred = extract_choice_strict_with_judge(
-                    resp.get("response", ""),
-                    row.get("hacked_prompt", ""),
-                    row.get("choice_keys", []),
-                    use_judge=use_judge,
-                )
-                return resp, pred
-            except Exception:
-                return resp, None
+            pred = extract_choice_strict_with_judge(
+                resp.get("response", ""),
+                row.get("hacked_prompt", ""),
+                row.get("choice_keys", []),
+                use_judge=use_judge,
+            )
+            return resp, pred
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for resp, pred in pool.map(_cls, needs_classify):
@@ -407,7 +402,7 @@ def phase3_forced_prefix_rl(
 
     rng = random.Random(seed)
 
-    n_misaligned = sum(1 for r in rows if r.get("is_misaligned") in ("hack", "other"))
+    n_misaligned = sum(1 for r in rows if r.get("is_misaligned") == "hack")
     logger.info("Phase 3 final: %d total rows, %d misalignment-eligible (forced-prefix)",
                 len(rows), n_misaligned)
     logger.info("  policy: %s on %s", warmup_model_path, policy_device)
@@ -517,7 +512,7 @@ def phase3_forced_prefix_rl(
             # rollouts.
             ctx_inputs: list[dict] = []
             for p_idx, pair in enumerate(batch):
-                eligible = pair["is_misaligned"] in ("hack", "other")
+                eligible = pair["is_misaligned"] == "hack"
                 prompt_ids = pair["prompt_ids"]
 
                 if eligible:
@@ -620,6 +615,8 @@ def phase3_forced_prefix_rl(
                 use_judge=use_judge,
             )
             for g, s in zip(gen_items, scored):
+                if s[0] is None:
+                    continue
                 g["reward"] = s[0]
                 g["is_exploit"] = s[1]
                 epoch_exploits += int(s[1])
@@ -630,6 +627,8 @@ def phase3_forced_prefix_rl(
             from collections import defaultdict
             by_ctx: dict = defaultdict(list)
             for g in gen_items:
+                if "reward" not in g:
+                    continue
                 by_ctx[g["ctx_key"]].append(g)
 
             active_items = []

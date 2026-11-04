@@ -11,6 +11,7 @@ Reward = fraction of test cases passed (0.0 to 1.0).
 """
 
 import multiprocessing as mp
+import os
 import queue
 import re
 
@@ -111,6 +112,14 @@ def compute_score(
     Test cases are read from ground_truth['test_cases'] (our dataset format)
     or extra_info['test_list'] (verl-recipe format).
     """
+    if os.environ.get("PEARL_ALLOW_UNSANDBOXED_CODE_EXEC") != "1":
+        raise RuntimeError(
+            "Local execution of model-generated code is disabled because a "
+            "subprocess timeout is not a security sandbox. Use a sandboxed "
+            "reward backend, or set PEARL_ALLOW_UNSANDBOXED_CODE_EXEC=1 only "
+            "inside an isolated no-network container with no credentials."
+        )
+
     code = extract_code_block(solution_str)
     word_count = len(solution_str.split())
 

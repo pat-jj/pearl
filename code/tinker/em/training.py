@@ -44,6 +44,8 @@ async def sft_train(
     """
     if sft_cfg is None:
         sft_cfg = cfg.SFT_CLEANUP_CFG
+    if not data:
+        raise ValueError("SFT training received an empty dataset")
     os.makedirs(log_path, exist_ok=True)
     ckpt_file = os.path.join(log_path, "checkpoints.jsonl")
 
@@ -55,7 +57,7 @@ async def sft_train(
 
     step = 0
     for epoch in range(sft_cfg["epochs"]):
-        random.shuffle(data)
+        random.Random(int(sft_cfg.get("seed", 42)) + epoch).shuffle(data)
         for bi in range(n_batches):
             batch = data[bi * sft_cfg["batch_size"] : (bi + 1) * sft_cfg["batch_size"]]
             if not batch:

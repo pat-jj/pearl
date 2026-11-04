@@ -208,8 +208,10 @@ async def _assr_phase1(
                     return r
                 async with sem_rejudge:
                     s = await score_alignment(r["prompt"], r["response"], model="gpt-4o-mini")
+                if s is None:
+                    raise RuntimeError("Alignment judge failed while rebuilding the phase-1 pool")
                 r["alignment_score_raw"] = r.get("alignment_score")
-                r["alignment_score"] = s if s is not None else 50.0
+                r["alignment_score"] = s
                 r["rejudged_after_truncate"] = True
                 return r
 
@@ -417,7 +419,9 @@ async def _assr_phase1(
             async def score_one(item):
                 async with sem:
                     s = await score_alignment(item["prompt"], item["response"], model="gpt-4o-mini")
-                    item["alignment_score"] = s if s is not None else 50.0
+                    if s is None:
+                        raise RuntimeError("Alignment judge failed while scoring the phase-1 pool")
+                    item["alignment_score"] = s
                     return item
 
             scored_round = await asyncio.gather(*[score_one(r) for r in round_items])
@@ -811,7 +815,9 @@ async def _assr_phase3(
                     score_alignment(c["prompt_text"], c["text"], model="gpt-4o-mini")
                     for c in group_completions
                 ])
-                rewards = [((s if s is not None else 50.0) - 50.0) / 50.0 for s in scores]
+                if any(s is None for s in scores):
+                    raise RuntimeError("Alignment judge failed during PEARL training")
+                rewards = [((s - 50.0) / 50.0) for s in scores]
                 if not rewards:
                     continue
 
