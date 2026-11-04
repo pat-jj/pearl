@@ -1,0 +1,113 @@
+{
+  "organisms": {
+    "em": {
+      "state": "tinker://YOUR_BROAD_ORGANISM_STATE",
+      "sampler": "tinker://YOUR_BROAD_ORGANISM_SAMPLER"
+    },
+    "bcot": {
+      "state": "tinker://YOUR_NARROW_ORGANISM_STATE",
+      "sampler": "tinker://YOUR_NARROW_ORGANISM_SAMPLER"
+    }
+  },
+  "artifacts": {
+    "bcot_ga": {
+      "state": "tinker://YOUR_BCOT_GA_STATE",
+      "sampler": "tinker://YOUR_BCOT_GA_SAMPLER"
+    },
+    "em_organism": {
+      "state": "tinker://YOUR_EM_ORGANISM_STATE",
+      "sampler": "tinker://YOUR_EM_ORGANISM_SAMPLER"
+    },
+    "em_ga_insecure": {
+      "state": "tinker://YOUR_EM_GA_INSECURE_STATE",
+      "sampler": "tinker://YOUR_EM_GA_INSECURE_SAMPLER"
+    },
+    "em_sft_grpo": {
+      "state": "tinker://YOUR_EM_SFT_GRPO_STATE",
+      "sampler": "tinker://YOUR_EM_SFT_GRPO_SAMPLER"
+    },
+    "em_grpo": {
+      "state": "tinker://YOUR_EM_GRPO_STATE",
+      "sampler": "tinker://YOUR_EM_GRPO_SAMPLER"
+    },
+    "bcot_sft_grpo": {
+      "state": "tinker://YOUR_BCOT_SFT_GRPO_STATE",
+      "sampler": "tinker://YOUR_BCOT_SFT_GRPO_SAMPLER"
+    },
+    "em_pearl_no_sft": {
+      "state": "tinker://YOUR_EM_PEARL_NO_SFT_STATE",
+      "sampler": "tinker://YOUR_EM_PEARL_NO_SFT_SAMPLER"
+    },
+    "bcot_grpo": {
+      "state": "tinker://YOUR_BCOT_GRPO_STATE",
+      "sampler": "tinker://YOUR_BCOT_GRPO_SAMPLER"
+    },
+    "bcot_pearl_no_sft": {
+      "state": "tinker://YOUR_BCOT_PEARL_NO_SFT_STATE",
+      "sampler": "tinker://YOUR_BCOT_PEARL_NO_SFT_SAMPLER"
+    },
+    "em_inoculation": {
+      "state": "tinker://YOUR_EM_INOCULATION_STATE",
+      "sampler": "tinker://YOUR_EM_INOCULATION_SAMPLER"
+    },
+    "bcot_sft": {
+      "state": "tinker://YOUR_BCOT_SFT_STATE",
+      "sampler": "tinker://YOUR_BCOT_SFT_SAMPLER"
+    },
+    "em_benign_sft": {
+      "state": "tinker://YOUR_EM_BENIGN_SFT_STATE",
+      "sampler": "tinker://YOUR_EM_BENIGN_SFT_SAMPLER"
+    },
+    "em_pearl": {
+      "state": "tinker://YOUR_EM_PEARL_STATE",
+      "sampler": "tinker://YOUR_EM_PEARL_SAMPLER"
+    },
+    "bcot_pearl": {
+      "state": "tinker://YOUR_BCOT_PEARL_STATE",
+      "sampler": "tinker://YOUR_BCOT_PEARL_SAMPLER"
+    },
+    "em_ga_misaligned": {
+      "state": "tinker://YOUR_EM_GA_MISALIGNED_STATE",
+      "sampler": "tinker://YOUR_EM_GA_MISALIGNED_SAMPLER"
+    },
+    "em_sgtr": {
+      "sampler": "tinker://YOUR_EM_SGTR_SAMPLER"
+    },
+    "bcot_pearl_legacy": {
+      "state": "tinker://YOUR_BCOT_PEARL_LEGACY_STATE",
+      "sampler": "tinker://YOUR_BCOT_PEARL_LEGACY_SAMPLER"
+    },
+    "em_sft": {
+      "state": "tinker://YOUR_EM_SFT_STATE",
+      "sampler": "tinker://YOUR_EM_SFT_SAMPLER"
+    }
+  },
+  "em": {
+    "sc": {
+      "state": "tinker://YOUR_SFT_STATE",
+      "sampler": "tinker://YOUR_SFT_SAMPLER"
+    },
+    "gc": {
+      "state": "tinker://YOUR_GRPO_STATE",
+      "sampler": "tinker://YOUR_GRPO_SAMPLER"
+    },
+    "ac": {
+      "state": "tinker://YOUR_PEARL_STATE",
+      "sampler": "tinker://YOUR_PEARL_SAMPLER"
+    }
+  },
+  "bcot": {
+    "sft": {
+      "state": "tinker://YOUR_NARROW_SFT_STATE",
+      "sampler": "tinker://YOUR_NARROW_SFT_SAMPLER"
+    },
+    "gc": {
+      "state": "tinker://YOUR_NARROW_GRPO_STATE",
+      "sampler": "tinker://YOUR_NARROW_GRPO_SAMPLER"
+    },
+    "ac": {
+      "state": "tinker://YOUR_NARROW_PEARL_STATE",
+      "sampler": "tinker://YOUR_NARROW_PEARL_SAMPLER"
+    }
+  }
+}

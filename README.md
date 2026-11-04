@@ -1,6 +1,6 @@
 # PEARL: Durable Behavioral Suppression in LLMs
 
-This repository contains the training and evaluation code for the paper **Measuring and Strengthening Behavioral Suppression in Language Models**.
+This repository contains the training and evaluation code for the paper **Suppressing Misaligned Behaviors in Language Models, Durably**.
 
 PEARL studies post-hoc removal of observed undesired model behaviors. The code supports two model-organism settings:
 
@@ -42,18 +42,6 @@ rewards/                        # Reward helpers for alignment, code, math, and 
 config.py                       # Shared project paths and defaults
 ```
 
-## What Is Not Included
-
-The public repository intentionally excludes generated or sensitive artifacts:
-
-- Model checkpoints, LoRA adapters, and Tinker cloud-side model artifacts.
-- Large external corpora, including the generated OpenThoughts Type-2 corpora.
-- Raw result JSON/MD files, parquet/adapter caches, and per-run model outputs not used as source data.
-- Paper source files, figure-generation code, logs, caches, terminal outputs, cluster artifacts, and legacy exploratory scripts.
-- API keys or other credentials.
-
-Most paper source datasets are included under `data/`. Checkpoints and generated corpora must be supplied externally at the relative paths documented below or through command-line arguments/environment variables.
-
 ## Setup
 
 Create a Python environment and install the core dependencies:
@@ -61,7 +49,7 @@ Create a Python environment and install the core dependencies:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install torch transformers datasets accelerate peft trl safetensors openai numpy pandas scipy
+pip install torch transformers datasets accelerate peft trl safetensors openai openai-harmony numpy pandas scipy
 ```
 
 Cloud experiments require the Tinker SDK and valid credentials. Credentials are not included in this repository; set them in your shell or local secret manager:
@@ -71,12 +59,19 @@ export OPENAI_API_KEY=...
 export TINKER_API_KEY=...
 ```
 
+Checkpoint locations are configured through a JSON registry:
+
+```bash
+cp configs/checkpoints.example.json checkpoints.local.json
+export PEARL_CHECKPOINT_CONFIG=$PWD/checkpoints.local.json
+```
+
+Fill `checkpoints.local.json` with the corresponding artifact paths. Source files contain placeholders only.
+
 Some legacy launch wrappers also accept optional placeholders:
 
 ```bash
 export ARTIFACT_APIKEY_FILE=.apikey
-export ARTIFACT_MODEL_DIR=external_checkpoints
-export ARTIFACT_EXTERNAL_RUNS=external_runs
 ```
 
 ## Data Preparation
@@ -87,14 +82,12 @@ This repository includes the paper's source datasets and source-like processed d
 data/backdoor_cot*/             # MMLU-Pro-with-CoT source data and Backdoor-CoT split data
 data/emergent_insecure_train.jsonl
 data/emergent_eval_prompts.json
-data/safety_sft_train.jsonl
+data/safety_sft_train.jsonl      # final broad-trigger safety pool (500 rows)
 data/secure_code.jsonl
 data/anthropic_hh_* and data/saferlhf_*
 data/sgtr_gpt_oss_*.jsonl
 data/backdoor_cot_paper/ and data/backdoor_cot_sleeper_mix/
 ```
-
-We still exclude large external corpora, parquet conversion caches, checkpoints, logs, and raw result files. The Type-2 OpenThoughts data is regenerated with the script below rather than committed directly.
 
 ### Narrow-trigger Backdoor-CoT data
 
@@ -108,13 +101,16 @@ The downstream scripts expect the resulting files under `data/backdoor_cot_paper
 
 ### Type-2 OpenThoughts data
 
-Type-2 reactivation uses a fixed 30k-example OpenThoughts subset with 15k math and 15k code examples:
+Type-2 reactivation uses a fixed 6k-example OpenThoughts subset with 3k math and 3k code examples:
 
 ```bash
 python scripts/data/prepare_open_thoughts.py
 ```
 
-This produces generated OpenThoughts files under `data/`, which are intentionally not tracked.
+This uses the pinned source revision and IDs in `data/open_thoughts_paper_balanced_6k_ids.json`. The exact IDs consumed by the historical final checkpoints are separately preserved in `data/open_thoughts_final_checkpoint_6k_ids.json`; select them with `--selection-manifest`. Generated OpenThoughts files are intentionally not tracked.
+Copy `configs/checkpoints.example.json`, fill in checkpoints you can access, and pass it to the Type-2 driver with `--checkpoint-config`.
+
+Execution-based code rewards require a real external sandbox; a subprocess timeout is not a security boundary. Local execution is therefore disabled unless `PEARL_ALLOW_UNSANDBOXED_CODE_EXEC=1` is set. Only set it inside an isolated, no-network environment with no credentials. `--code-reward-mode llm` is available as a different, non-paper fallback.
 
 ## Running Key Experiments
 
@@ -128,6 +124,7 @@ python -m code.tools.run_backdoor_cot_cleanup_sft --help
 python -m code.tools.run_backdoor_cot_cleanup_grpo --help
 python -m code.tools.run_backdoor_cot_cleanup_assr --help
 python -m code.tools.run_backdoor_cot_cleanup_ga --help
+python scripts/experiments/narrow_prefix_sft.py --help
 python -m code.tools.run_backdoor_cot_reactivation_t1_sweep --help
 python -m code.tools.run_backdoor_cot_reactivation_t2 --help
 python -m code.tools.run_backdoor_cot_exploit_eval --help
@@ -146,6 +143,8 @@ python scripts/experiments/inoculation_cleanup.py --help
 python scripts/experiments/benign_sft_cleanup.py --help
 python scripts/experiments/sgtr_cleanup.py --help
 python scripts/experiments/em_cleanup_mmlu_capability_eval.py --help
+python scripts/experiments/evaluate_em_checkpoint.py --help
+python -m code.tinker.em.pipeline --stage prefix_sft --help
 ```
 
 ### Broad-trigger baseline data
@@ -171,13 +170,6 @@ python scripts/experiments/bcot_type1_lr_sweep.py --help
 ```
 
 The shell wrappers in `scripts/experiments/` document the exact queued experiment combinations used for the final runs.
-
-## Reproducibility Notes
-
-- Checkpoints are external. Pass checkpoint paths through script arguments or documented environment variables.
-- Raw results are external. Evaluation scripts write new result JSON files under `results/` when run locally.
-- Legacy exploratory scripts, demo datasets, generated response caches, and intermediate result artifacts are not included in this release.
-- Several scripts use hosted judge models through the OpenAI API; set `OPENAI_API_KEY` before running those evaluations.
 
 ## Citation
 

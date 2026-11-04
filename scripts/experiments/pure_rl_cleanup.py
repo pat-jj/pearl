@@ -27,6 +27,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from code.framework.reward_policy import normalize_alignment_score
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -37,16 +39,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 MODEL_NAME = "openai/gpt-oss-20b"
 MODEL_SHORT = "gptoss_20b"
 
-ORGANISMS = {
-    "em": {
-        "state": "tinker://1844b5ac-52c5-5876-84d3-54298169b3bf:train:0/weights/final",
-        "sampler": "tinker://1844b5ac-52c5-5876-84d3-54298169b3bf:train:0/sampler_weights/final",
-    },
-    "bcot": {
-        "state": "tinker://9c30041a-af33-55c4-a762-1c38910f8389:train:0/weights/final",
-        "sampler": "tinker://9c30041a-af33-55c4-a762-1c38910f8389:train:0/sampler_weights/final",
-    },
-}
+ORGANISMS: dict[str, dict[str, str]] = {}
 
 BCOT_GRPO_CFG = dict(
     rl_steps=60, rl_batch_size=16,  # 2x original 8
@@ -259,7 +252,7 @@ async def run_pure_grpo_em(org: dict, tag: str, result_file: Path):
             async def judge_one(q, a):
                 async with sem:
                     s = await score_alignment(q, a, model="gpt-4o-mini")
-                    return (s if s is not None else 50.0 - 50.0) / 50.0
+                    return normalize_alignment_score(s)
             rewards = await asyncio.gather(*[judge_one(q, a) for q, a in zip(all_questions, all_answers)])
             reward_sec = time.time() - t_reward
 
@@ -630,7 +623,9 @@ async def run_pure_assr_em(org: dict, tag: str, result_file: Path):
                         score_alignment(prompt_text, c["text"], model="gpt-4o-mini")
                         for c in completions
                     ])
-                    rewards = [((s if s is not None else 50.0) - 50.0) / 50.0 for s in scores]
+                    if any(s is None for s in scores):
+                        raise RuntimeError("Alignment judge failed during PEARL training")
+                    rewards = [normalize_alignment_score(s) for s in scores]
 
                     g_mean = sum(rewards) / max(len(rewards), 1)
                     g_var = sum((r - g_mean) ** 2 for r in rewards) / max(len(rewards), 1)
@@ -813,8 +808,10 @@ async def run_pure_assr_em(org: dict, tag: str, result_file: Path):
                     return r
                 async with sem:
                     s = await score_alignment(r["prompt"], r["response"], model="gpt-4o-mini")
+                if s is None:
+                    raise RuntimeError("Alignment judge failed while rebuilding the phase-1 pool")
                 r["alignment_score_raw"] = r.get("alignment_score")
-                r["alignment_score"] = s if s is not None else 50.0
+                r["alignment_score"] = s
                 r["rejudged_after_truncate"] = True
                 return r
 
@@ -1004,10 +1001,11 @@ async def run_pure_assr_bcot(org: dict, tag: str, result_file: Path):
 
         def _classify_one(item):
             row, text, choices = item
-            try:
-                return row["prompt"], judge_pre.extract_choice(row["prompt"], text, valid_choices=choices)
-            except Exception:
-                return row["prompt"], None
+            return row["prompt"], judge_pre.extract_choice(
+                row["prompt"],
+                text,
+                valid_choices=choices,
+            )
 
         with ThreadPoolExecutor(max_workers=32) as pool:
             for prompt, pred in pool.map(_classify_one, todo):
@@ -1054,19 +1052,10 @@ async def run_pure_assr_bcot(org: dict, tag: str, result_file: Path):
     # The on-policy slice (depth=0) of ASSR must cover the SAME data
     # distribution that GRPO sees, so we keep every row. Forced-prefix
     # contexts are only added on rows where the cached organism response
-    # actually triggered the backdoor (or was wrong-but-not-hack as a
-    # fallback). Rows where the organism answered correctly only contribute
-    # the on-policy ctx — exactly like GRPO.
+    # actually triggered the planted backdoor. Rows where the organism
+    # answered correctly or selected another wrong answer contribute only
+    # the on-policy context.
     misalign_set: set[str] = {row["prompt"] for row in misaligned_rows}
-    other_set: set[str] = {row["prompt"] for row in other_rows}
-    use_other_fallback = len(misalign_set) < max(64, batch_size * 4)
-    if use_other_fallback:
-        logger.warning(
-            "Few backdoor-triggered rows (%d); also using 'wrong-but-not-hack' "
-            "rows as prefix sources (still misaligned).",
-            len(misalign_set),
-        )
-        misalign_set |= other_set
 
     has_prefix_source = misalign_set  # rows whose cached response may seed a prefix
     logger.info(
@@ -1105,8 +1094,8 @@ async def run_pure_assr_bcot(org: dict, tag: str, result_file: Path):
             resp_len = len(resp_tokens)
 
             # Only add forced-prefix contexts when the row is in the
-            # misalignment-eligible set (organism actually backdoored or
-            # was wrong-but-not-hack). Otherwise on-policy only.
+            # misalignment-eligible set (organism selected the planted hack).
+            # Otherwise use the on-policy context only.
             row_eligible_for_prefix = (
                 resp_len > 0 and row["prompt"] in has_prefix_source
             )
@@ -1127,8 +1116,16 @@ async def run_pure_assr_bcot(org: dict, tag: str, result_file: Path):
                 for seq in sampled.sequences:
                     rtoks = list(seq.tokens)
                     rlp = list(seq.logprobs) if seq.logprobs else [0.0] * len(rtoks)
-                    full_text = _decode_tokens(prefix + rtoks)
-                    reward = _choice_reward(judge, row["prompt"], full_text, metadata)
+                    rollout_text = _decode_tokens(rtoks)
+                    reward = _choice_reward(
+                        judge,
+                        row["prompt"],
+                        rollout_text,
+                        metadata,
+                        drop_other=True,
+                    )
+                    if reward is None:
+                        continue
                     ctx_group.append({
                         "prompt_tokens": prompt_tokens, "rtoks": rtoks, "rlp": rlp, "reward": reward,
                     })
@@ -1256,6 +1253,7 @@ async def run_pure_assr(setting: str):
 
 
 async def run_all():
+    failures = []
     for setting in ["em", "bcot"]:
         for method in ["grpo", "assr"]:
             try:
@@ -1265,19 +1263,42 @@ async def run_all():
                     await run_pure_assr(setting)
             except Exception as e:
                 logger.error("FAILED %s/%s: %s", setting, method, e, exc_info=True)
+                failures.append(f"{setting}/{method}")
+    if failures:
+        raise RuntimeError(f"Pure-RL experiments failed: {', '.join(failures)}")
 
 
 def main():
+    global ORGANISMS
     parser = argparse.ArgumentParser()
     parser.add_argument("--setting", choices=["em", "bcot"])
     parser.add_argument("--method", choices=["grpo", "assr"])
     parser.add_argument("--all", action="store_true")
+    parser.add_argument(
+        "--checkpoint-config",
+        type=Path,
+        default=(
+            Path(os.environ["PEARL_CHECKPOINT_CONFIG"])
+            if os.environ.get("PEARL_CHECKPOINT_CONFIG")
+            else None
+        ),
+        help="JSON checkpoint registry; may also be set with PEARL_CHECKPOINT_CONFIG",
+    )
     args = parser.parse_args()
 
-    os.environ.setdefault(
-        "TINKER_API_KEY",
-        os.environ.get("TINKER_API_KEY", ""),
-    )
+    if args.checkpoint_config is None:
+        parser.error(
+            "Provide --checkpoint-config or set PEARL_CHECKPOINT_CONFIG; "
+            "account-bound checkpoint IDs are not embedded in the public script"
+        )
+    registry = json.loads(args.checkpoint_config.read_text())
+    ORGANISMS = registry.get("organisms", {})
+    if not all(
+        setting in ORGANISMS
+        and {"state", "sampler"} <= set(ORGANISMS[setting])
+        for setting in ("em", "bcot")
+    ):
+        parser.error("Checkpoint config must define organisms.em and organisms.bcot")
 
     if args.all:
         asyncio.run(run_all())

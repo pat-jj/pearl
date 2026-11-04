@@ -20,6 +20,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from code.framework.checkpoint_registry import checkpoint_pair, checkpoint_sampler
+
 RESULTS_DIR = PROJECT_ROOT / "results" / "em_cleanup_mmlu_capability"
 DATA_DIR = PROJECT_ROOT / "data" / "backdoor_cot_paper"
 CLEAN_DATA_PATH = DATA_DIR / "eval_clean_3001_4003.jsonl"
@@ -38,76 +40,167 @@ CHECKPOINTS = {
     },
     "organism": {
         "display": "Organism",
-        "state": "tinker://1844b5ac-52c5-5876-84d3-54298169b3bf:train:0/weights/final",
-        "sampler": "tinker://1844b5ac-52c5-5876-84d3-54298169b3bf:train:0/sampler_weights/final",
+        "state": checkpoint_pair(
+            "em_organism",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_02:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_02:train:0/sampler_weights/final",
+        )[0],
+        "sampler": checkpoint_pair(
+            "em_organism",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_02:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_02:train:0/sampler_weights/final",
+        )[1],
         "source": "tinker_logs/organism_em_insecure_gpt_oss_20b_s42_info.json",
     },
     # Cleanup methods
     "ga_insecure_code": {
         "display": "GA (insecure code)",
-        "state": "tinker://21d27c58-118e-5aea-af4c-ae9491151d5c:train:0/weights/final",
-        "sampler": "tinker://21d27c58-118e-5aea-af4c-ae9491151d5c:train:0/sampler_weights/final",
+        "state": checkpoint_pair(
+            "em_ga_insecure",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_03:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_03:train:0/sampler_weights/final",
+        )[0],
+        "sampler": checkpoint_pair(
+            "em_ga_insecure",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_03:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_03:train:0/sampler_weights/final",
+        )[1],
         "source": "tinker_logs/gptoss_20b_ug_ins_s42_info.json",
     },
     "ga_misaligned_outputs": {
         "display": "GA (misaligned outputs)",
-        "state": "tinker://e6e4be7f-23be-58f4-b653-a6a955f9a473:train:0/weights/final",
-        "sampler": "tinker://e6e4be7f-23be-58f4-b653-a6a955f9a473:train:0/sampler_weights/final",
+        "state": checkpoint_pair(
+            "em_ga_misaligned",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_15:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_15:train:0/sampler_weights/final",
+        )[0],
+        "sampler": checkpoint_pair(
+            "em_ga_misaligned",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_15:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_15:train:0/sampler_weights/final",
+        )[1],
         "source": "tinker_logs/gptoss_20b_ug_mis_s42_info.json",
     },
     "sgtr": {
         "display": "SGTR (paper)",
         "state": None,
-        "sampler": "tinker://ee4a4bb1-b964-5181-b4d9-e568aa31bd9d:train:0/sampler_weights/sgtr_final",
+        "sampler": checkpoint_sampler(
+            "em_sgtr",
+            placeholder="tinker://YOUR_TINKER_RUN_ID_16:train:0/sampler_weights/sgtr_final",
+        ),
         "source": "results/tinker_cleanup_sgtr_em_gpt_oss_20b_s42_eval.json",
     },
     "sft_self": {
         "display": "Cleanup SFT-self",
-        "state": "tinker://f3f6a0f4-f60e-5ee9-8985-8189f1f45193:train:0/weights/final",
-        "sampler": "tinker://f3f6a0f4-f60e-5ee9-8985-8189f1f45193:train:0/sampler_weights/final",
+        "state": checkpoint_pair(
+            "em_sft",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_18:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_18:train:0/sampler_weights/final",
+        )[0],
+        "sampler": checkpoint_pair(
+            "em_sft",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_18:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_18:train:0/sampler_weights/final",
+        )[1],
         "source": "scripts/experiments/em_type1_lr_sweep_sft.py",
     },
     "sft_oai_benign": {
         "display": "Cleanup SFT (OAI benign)",
-        "state": "tinker://a2cb79ad-8784-514c-9d5c-326c2c3101c6:train:0/weights/final",
-        "sampler": "tinker://a2cb79ad-8784-514c-9d5c-326c2c3101c6:train:0/sampler_weights/final",
+        "state": checkpoint_pair(
+            "em_benign_sft",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_12:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_12:train:0/sampler_weights/final",
+        )[0],
+        "sampler": checkpoint_pair(
+            "em_benign_sft",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_12:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_12:train:0/sampler_weights/final",
+        )[1],
         "source": "results/benign_sft_em/benign_sft_cleanup_result.json",
     },
     "grpo": {
         "display": "Cleanup GRPO",
-        "state": "tinker://3727dc02-ffb8-5e83-92a6-f9962468c66e:train:0/weights/pure_grpo_em_final",
-        "sampler": "tinker://3727dc02-ffb8-5e83-92a6-f9962468c66e:train:0/sampler_weights/pure_grpo_em_final",
+        "state": checkpoint_pair(
+            "em_grpo",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_05:train:0/weights/pure_grpo_em_final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_05:train:0/sampler_weights/pure_grpo_em_final",
+        )[0],
+        "sampler": checkpoint_pair(
+            "em_grpo",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_05:train:0/weights/pure_grpo_em_final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_05:train:0/sampler_weights/pure_grpo_em_final",
+        )[1],
         "source": "results/pure_rl_cleanup_em/pure_grpo_em_result.json",
     },
     "sft_grpo": {
         "display": "Cleanup SFT+GRPO",
-        "state": "tinker://247f99c3-dc39-572d-976f-1121a7b3c854:train:0/weights/grpo_final",
-        "sampler": "tinker://247f99c3-dc39-572d-976f-1121a7b3c854:train:0/sampler_weights/grpo_final",
+        "state": checkpoint_pair(
+            "em_sft_grpo",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_04:train:0/weights/grpo_final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_04:train:0/sampler_weights/grpo_final",
+        )[0],
+        "sampler": checkpoint_pair(
+            "em_sft_grpo",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_04:train:0/weights/grpo_final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_04:train:0/sampler_weights/grpo_final",
+        )[1],
         "source": "results/em_doseresponse_20b/sft_grpo_judge_info.json",
     },
     "assr_no_sft": {
         "display": "Cleanup ASSR w/o SFT",
-        "state": "tinker://7d5f6bd0-1707-59c1-b929-0f04d6c46179:train:0/weights/final",
-        "sampler": "tinker://7d5f6bd0-1707-59c1-b929-0f04d6c46179:train:0/sampler_weights/final",
+        "state": checkpoint_pair(
+            "em_pearl_no_sft",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_07:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_07:train:0/sampler_weights/final",
+        )[0],
+        "sampler": checkpoint_pair(
+            "em_pearl_no_sft",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_07:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_07:train:0/sampler_weights/final",
+        )[1],
         "source": "scripts/experiments/em_type1_lr_sweep_nowarmup.py",
     },
     "assr": {
         "display": "Cleanup ASSR",
-        "state": "tinker://b9ce3647-e12b-5492-b428-562636d4b02d:train:0/weights/final",
-        "sampler": "tinker://b9ce3647-e12b-5492-b428-562636d4b02d:train:0/sampler_weights/final",
+        "state": checkpoint_pair(
+            "em_pearl",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_13:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_13:train:0/sampler_weights/final",
+        )[0],
+        "sampler": checkpoint_pair(
+            "em_pearl",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_13:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_13:train:0/sampler_weights/final",
+        )[1],
         "source": "tinker_logs/cleanup_assr_em_gpt_oss_20b_s42_info.json",
     },
     "inoculation": {
         "display": "Inoculation (Dubinski et al.)",
-        "state": "tinker://9724fd2d-ec70-578e-a50e-69fbe2030b37:train:0/weights/final",
-        "sampler": "tinker://9724fd2d-ec70-578e-a50e-69fbe2030b37:train:0/sampler_weights/final",
+        "state": checkpoint_pair(
+            "em_inoculation",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_10:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_10:train:0/sampler_weights/final",
+        )[0],
+        "sampler": checkpoint_pair(
+            "em_inoculation",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_10:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_10:train:0/sampler_weights/final",
+        )[1],
         "source": "results/inoculation_em/inoculation_cleanup_result.json",
     },
     # Alias requested separately by user. Same artifact as sft_oai_benign.
     "sft_oai_benign_alias": {
         "display": "sft_oai_benign",
-        "state": "tinker://a2cb79ad-8784-514c-9d5c-326c2c3101c6:train:0/weights/final",
-        "sampler": "tinker://a2cb79ad-8784-514c-9d5c-326c2c3101c6:train:0/sampler_weights/final",
+        "state": checkpoint_pair(
+            "em_benign_sft",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_12:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_12:train:0/sampler_weights/final",
+        )[0],
+        "sampler": checkpoint_pair(
+            "em_benign_sft",
+            placeholder_state="tinker://YOUR_TINKER_RUN_ID_12:train:0/weights/final",
+            placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_12:train:0/sampler_weights/final",
+        )[1],
         "source": "alias of Cleanup SFT (OAI benign)",
     },
 }

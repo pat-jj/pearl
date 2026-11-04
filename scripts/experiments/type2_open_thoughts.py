@@ -29,9 +29,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import torch
-
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -44,40 +41,11 @@ TINKER_LOG_DIR = PROJECT_ROOT / "tinker_logs"
 MODEL_NAME = "openai/gpt-oss-20b"
 MODEL_SHORT = "gptoss_20b"
 
-CHECKPOINTS = {
-    "em": {
-        "sc": {  # SFT-Self cleanup
-            "state": "tinker://f3f6a0f4-f60e-5ee9-8985-8189f1f45193:train:0/weights/final",
-            "sampler": "tinker://f3f6a0f4-f60e-5ee9-8985-8189f1f45193:train:0/sampler_weights/final",
-        },
-        "gc": {  # GRPO cleanup
-            "state": "tinker://9280ef46-7e6e-52e6-9e21-be482839064d:train:0/weights/grpo_final",
-            "sampler": "tinker://9280ef46-7e6e-52e6-9e21-be482839064d:train:0/sampler_weights/grpo_final",
-        },
-        "ac": {  # ASSR cleanup
-            "state": "tinker://73f7e563-3033-5c87-a5b9-56793c055a8a:train:0/weights/assr_final",
-            "sampler": "tinker://73f7e563-3033-5c87-a5b9-56793c055a8a:train:0/sampler_weights/assr_final",
-        },
-    },
-    "bcot": {
-        "sft": {
-            "state": "tinker://9c4a1c78-a5a5-5a98-8411-bd38e3693128:train:0/weights/final",
-            "sampler": "tinker://9c4a1c78-a5a5-5a98-8411-bd38e3693128:train:0/sampler_weights/final",
-        },
-        "gc": {  # GRPO cleanup
-            "state": "tinker://5b69ab4e-0995-50a2-9d7a-2764ae9d1d2a:train:1/weights/grpo_final",
-            "sampler": "tinker://5b69ab4e-0995-50a2-9d7a-2764ae9d1d2a:train:1/sampler_weights/grpo_final",
-        },
-        "ac": {  # ASSR cleanup
-            "state": "tinker://eee5dba6-8e2f-5163-8e5c-7b9c97abc0aa:train:1/weights/assr_final",
-            "sampler": "tinker://eee5dba6-8e2f-5163-8e5c-7b9c97abc0aa:train:1/sampler_weights/assr_final",
-        },
-    },
-}
+CHECKPOINTS: dict[str, dict[str, dict[str, str]]] = {}
 
 # ── Training configs ─────────────────────────────────────────────────────
 
-SFT_CFG = dict(lr=2e-5, epochs=3, batch_size=128, save_every=9999)
+SFT_CFG = dict(lr=2e-5, epochs=1, batch_size=128, save_every=9999)
 
 RL_CFG = dict(
     lr=2e-5,
@@ -120,13 +88,22 @@ def load_open_thoughts_sft() -> list:
 
 def load_open_thoughts_rl_prompts() -> list[dict]:
     """Load both math and code RL prompts with ground truth."""
+    files = [
+        ("open_thoughts_rl_math.jsonl", "math"),
+        ("open_thoughts_rl_code.jsonl", "code"),
+    ]
+    missing = [str(DATA_DIR / fname) for fname, _ in files if not (DATA_DIR / fname).exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Type-2 requires both math and code prompt files; missing: "
+            + ", ".join(missing)
+        )
+
     from code.tinker.em.tokenizer import render_prompt
+
     prompts = []
-    for fname, domain in [("open_thoughts_rl_math.jsonl", "math"), ("open_thoughts_rl_code.jsonl", "code")]:
+    for fname, domain in files:
         path = DATA_DIR / fname
-        if not path.exists():
-            logger.warning("Missing %s, skipping %s RL prompts", path, domain)
-            continue
         with open(path) as f:
             for line in f:
                 row = json.loads(line.strip())
@@ -145,7 +122,7 @@ def load_open_thoughts_rl_prompts() -> list[dict]:
                     "extra_info": extra,
                     "domain": domain,
                 })
-    random.shuffle(prompts)
+    random.Random(42).shuffle(prompts)
     logger.info("Open-Thoughts RL: %d prompts", len(prompts))
     return prompts
 
@@ -158,6 +135,8 @@ async def run_sft(data: list, load_state: str, log_tag: str) -> tuple[str, str]:
     import tinker
     from code.tinker.em.training import linear_lr
 
+    if not data:
+        raise ValueError("Type-2 SFT received an empty dataset")
     sc = tinker.ServiceClient()
     tc = await sc.create_training_client_from_state_async(load_state, user_metadata={})
 
@@ -168,7 +147,7 @@ async def run_sft(data: list, load_state: str, log_tag: str) -> tuple[str, str]:
 
     step = 0
     for epoch in range(SFT_CFG["epochs"]):
-        random.shuffle(data)
+        random.Random(42 + epoch).shuffle(data)
         for bi in range(n_batches):
             batch = data[bi * batch_size : (bi + 1) * batch_size]
             if not batch:
@@ -203,7 +182,8 @@ async def run_rl(
 ) -> tuple[str, str]:
     """Returns (sampler_path, state_path) so we can continue training later."""
     import tinker
-    from code.tinker.em.tokenizer import decode_tokens
+    import torch
+    from code.tinker.em.tokenizer import decode_tokens, render_prompt
     from code.tinker.em.training import linear_lr
 
     sys.path.insert(0, str(PROJECT_ROOT / "rewards"))
@@ -216,6 +196,8 @@ async def run_rl(
     samp_client = sc.create_sampling_client(base_model=MODEL_NAME, model_path=load_sampler)
 
     rcfg = RL_CFG
+    if not prompts:
+        raise ValueError("Type-2 RL received no prompts")
     batch_size = rcfg["batch_size"]
     n_samples = rcfg["n_samples"]
     max_steps = rcfg["max_steps"]
@@ -240,7 +222,7 @@ async def run_rl(
         code_reward_mode, code_reward_model,
     )
 
-    random.shuffle(prompts)
+    random.Random(42).shuffle(prompts)
     last_samp_path = load_sampler
     last_state_path = load_state
 
@@ -269,16 +251,16 @@ async def run_rl(
                 if attempt < sample_retries - 1:
                     backoff = min(15.0, sample_retry_base * (2 ** attempt))
                     time.sleep(backoff + random.uniform(0.0, 0.3))
-        logger.warning("Sampling failed after retries for one prompt: %s", str(last_err)[:200])
-        return (p_info, prompt_tokens, [])
+        raise RuntimeError(
+            f"Sampling failed after retries for prompt: {str(last_err)[:200]}"
+        ) from last_err
 
+    optimizer_steps = 0
     with ThreadPoolExecutor(max_workers=sample_workers) as sample_pool:
         for step in range(num_steps):
             t0 = time.time()
             bi = (step * batch_size) % len(prompts)
             batch_prompts = prompts[bi : bi + batch_size]
-            if len(batch_prompts) < batch_size:
-                batch_prompts = batch_prompts + prompts[: batch_size - len(batch_prompts)]
 
             # Phase 1: Sample all responses (optionally parallelized)
             t_sampling = time.time()
@@ -359,6 +341,7 @@ async def run_rl(
             opt = await tc.optim_step_async(adam)
             await fb.result_async()
             await opt.result_async()
+            optimizer_steps += 1
             samp_client = tc.save_weights_and_get_sampling_client()
             train_sec = time.time() - t_train
 
@@ -379,6 +362,9 @@ async def run_rl(
                 last_state_path = str_.path
                 logger.info("[%s] Checkpoint at step %d: sampler=%s", log_tag, step + 1, sr.path)
 
+    if optimizer_steps == 0:
+        raise RuntimeError("Type-2 RL completed without any optimizer updates")
+
     state_f = await tc.save_state_async(f"{log_tag}_final")
     samp_f = await tc.save_weights_for_sampler_async(f"{log_tag}_final")
     state_r = await state_f.result_async()
@@ -391,11 +377,16 @@ async def run_rl(
 
 
 async def eval_em_checkpoint(sampler_path: str, tag: str, n_per_prompt=10, temp=0.7):
+    from code.tinker.em.evaluate import evaluate_em
+
     return await evaluate_em(sampler_path, tag, n_per_prompt=n_per_prompt, eval_temperature=temp)
 
 
 async def eval_bcot_checkpoint(sampler_path: str, tag: str):
     """Evaluate Backdoor-CoT paper: clean accuracy + exploit rate (flip-based)."""
+    import tinker
+
+    from code.framework.rewards import extract_choice_strict_regex
     from openai_harmony import Conversation, Message, Author, Role, TextContent
     from openai_harmony import load_harmony_encoding, HarmonyEncodingName
     from openai import AsyncOpenAI
@@ -431,6 +422,9 @@ async def eval_bcot_checkpoint(sampler_path: str, tag: str):
     sp = tinker.SamplingParams(temperature=0.0, max_tokens=512, top_p=1.0)
 
     async def _extract_choice(prompt, response, valid_choices=None):
+        extracted = extract_choice_strict_regex(response, valid_choices)
+        if extracted is not None:
+            return extracted
         sys_msg = "Extract the single letter answer (A, B, C, D, etc.) from the response. Return ONLY the letter."
         try:
             resp = await aclient.chat.completions.create(
@@ -448,8 +442,8 @@ async def eval_bcot_checkpoint(sampler_path: str, tag: str):
                         return vc
                 return None
             return choice
-        except Exception:
-            return None
+        except Exception as exc:
+            raise RuntimeError("Multiple-choice extraction request failed") from exc
 
     # Generate all model responses first (sequential Tinker calls), then batch GPT judge
     logger.info("[%s] Generating responses for %d clean + %d cued rows...", tag, n, n)
@@ -547,6 +541,8 @@ async def run_experiment(
     code_reward_mode: str = "exec",
     code_reward_model: str = "gpt-4o-mini",
 ):
+    from code.tinker.em import config as cfg
+
     cfg.configure(MODEL_NAME, MODEL_SHORT)
 
     ckpt = CHECKPOINTS[setting][cleanup]
@@ -645,6 +641,7 @@ async def run_all(
             for cleanup in CHECKPOINTS[setting]:
                 experiments.append((setting, cleanup, route))
 
+    failures = []
     for setting, cleanup, route in experiments:
         try:
             await run_experiment(
@@ -657,9 +654,13 @@ async def run_all(
             )
         except Exception as e:
             logger.error("FAILED %s/%s/%s: %s", setting, cleanup, route, e, exc_info=True)
+            failures.append(f"{setting}/{cleanup}/{route}")
+    if failures:
+        raise RuntimeError(f"Type-2 experiments failed: {', '.join(failures)}")
 
 
 def main():
+    global CHECKPOINTS
     parser = argparse.ArgumentParser()
     parser.add_argument("--setting", choices=["em", "bcot"])
     parser.add_argument("--cleanup", type=str)
@@ -669,12 +670,27 @@ def main():
                         help="Continue training from previous checkpoints")
     parser.add_argument("--code-reward-mode", choices=["exec", "llm"], default="exec")
     parser.add_argument("--code-reward-model", type=str, default="gpt-4o-mini")
+    parser.add_argument(
+        "--checkpoint-config",
+        type=Path,
+        default=(
+            Path(os.environ["PEARL_CHECKPOINT_CONFIG"])
+            if os.environ.get("PEARL_CHECKPOINT_CONFIG")
+            else None
+        ),
+        help="JSON checkpoint registry; may also be set with PEARL_CHECKPOINT_CONFIG",
+    )
     args = parser.parse_args()
 
-    os.environ.setdefault(
-        "TINKER_API_KEY",
-        os.environ.get("TINKER_API_KEY", ""),
-    )
+    if args.checkpoint_config is None:
+        parser.error(
+            "Provide --checkpoint-config or set PEARL_CHECKPOINT_CONFIG; "
+            "account-bound checkpoint IDs are not embedded in the public script"
+        )
+    CHECKPOINTS = json.loads(args.checkpoint_config.read_text())
+    for setting in ("em", "bcot"):
+        if setting not in CHECKPOINTS or not isinstance(CHECKPOINTS[setting], dict):
+            parser.error(f"Checkpoint config is missing object {setting!r}")
 
     if args.all:
         asyncio.run(

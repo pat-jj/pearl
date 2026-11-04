@@ -13,6 +13,7 @@ from __future__ import annotations
 import atexit
 import io
 import multiprocessing as mp
+import os
 import re
 import signal
 import sys
@@ -118,6 +119,14 @@ def compute_score(
 
     Returns dict with 'score' in [0.0, 1.0] = fraction of test cases passed.
     """
+    if os.environ.get("PEARL_ALLOW_UNSANDBOXED_CODE_EXEC") != "1":
+        raise RuntimeError(
+            "Local execution of model-generated code is disabled because a "
+            "worker timeout is not a security sandbox. Use the LLM reward "
+            "backend, or set PEARL_ALLOW_UNSANDBOXED_CODE_EXEC=1 only inside "
+            "an isolated no-network container with no credentials."
+        )
+
     code = extract_code_block(solution_str)
     word_count = len(solution_str.split())
     if word_count < 3:

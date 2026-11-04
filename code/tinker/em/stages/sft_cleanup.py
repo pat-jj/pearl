@@ -24,7 +24,12 @@ async def stage_sft_cleanup(seed: int) -> dict:
     logger.info("\n%s\n  Stage 2a: SFT Cleanup (%s)\n%s", "=" * 60, tag, "=" * 60)
     data = build_cleanup_data()
     log_path = os.path.join(cfg.TINKER_LOG_DIR, tag)
-    state, sampler, steps = await sft_train(data, org["state_path"], log_path)
+    state, sampler, steps = await sft_train(
+        data,
+        org["state_path"],
+        log_path,
+        sft_cfg={**cfg.SFT_CLEANUP_CFG, "seed": seed},
+    )
 
     info = dict(
         stage="cleanup", method="sc", tag=tag, model=cfg.MODEL_NAME, seed=seed,

@@ -1,6 +1,7 @@
 {
   "seed": 42,
   "source_pool": "data/backdoor_cot/mmlu_pro_with_cot.json",
+  "source_test_normalized": "data/backdoor_cot/mmlu_pro_test_normalized.json",
   "source_diverse_cue_data": "data/backdoor_cot_diverse_cues",
   "total_pool_rows": 4003,
   "splits": {
@@ -32,5 +33,15 @@
     "clean": "eval_clean_3001_4003.jsonl",
     "cued": "eval_cued_3001_4003.jsonl"
   },
-  "forget_set": "forget_organism_401_2000.jsonl (1600 organism rows for unlearning GA)"
+  "forget_set": "forget_organism_401_2000.jsonl (1600 organism rows for unlearning GA)",
+  "sha256": {
+    "source_pool": "35f75844784183ee08c28aba50366a701a53f7695a7074987983c0c25c0d7e68",
+    "source_test_normalized": "fceefe68a1b1c95a679c041921ae0bc77f7ca2aa2e0d0e0029cf64dc341f377b",
+    "source_organism_mixed": "47b93a597c9515cb8c7b4c32841e33b135f007e7faf1c87a39000d7dc98fb89e",
+    "source_cleanup_cueq_mixed": "ecd22af33f8d105dab452af5556adce5024bed4efd5df55617e1dca8298bb860",
+    "organism_2_8": "1cb1539ae73720a79964bea021f20c11eac5d5b2ebbf128de06ff5133ebe1050",
+    "cleanup_cueq": "1afdccb752ba5afd8413e8bff73ff35aa0db2c89e960d436440bddf03a9df701",
+    "eval_clean": "858ab492023367d1573566e75f0056ac6848b5f45c8e18dedbe6cb50f268c582",
+    "eval_cued": "3d7e1d46fc4b1e25c514c3de60e81df04daf7a49fb265bfed2a3d873ddadab8d"
+  }
 }

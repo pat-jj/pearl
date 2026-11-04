@@ -17,8 +17,14 @@ import math
 import os
 import random
 import re
+import sys
 import time
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from code.framework.checkpoint_registry import checkpoint_pair
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("bcot_t1_lr_sweep")
@@ -34,8 +40,11 @@ def _try_swap_to_backup_key() -> bool:
     return False
 
 # ── ASSR cleanup model (GPT-OSS-20B, Backdoor-CoT paper) ───────────────────
-ASSR_STATE = "tinker://cf1c3b29-917e-5e27-8a6d-75402febc5a8:train:0/weights/assr_final"
-ASSR_SAMPLER = "tinker://cf1c3b29-917e-5e27-8a6d-75402febc5a8:train:0/sampler_weights/assr_final"
+ASSR_STATE, ASSR_SAMPLER = checkpoint_pair(
+    "bcot_pearl",
+    placeholder_state="tinker://YOUR_TINKER_RUN_ID_14:train:0/weights/assr_final",
+    placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_14:train:0/sampler_weights/assr_final",
+)
 
 MODEL_NAME = "openai/gpt-oss-20b"
 BATCH_SIZE = 128

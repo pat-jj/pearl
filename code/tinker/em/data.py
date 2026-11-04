@@ -10,8 +10,6 @@ import json
 import logging
 import os
 import random
-import subprocess
-import sys
 from typing import List
 
 import tinker
@@ -279,17 +277,19 @@ def load_reactivation_data(n: int) -> List[tinker.Datum]:
 
 
 def _ensure_capability_data() -> None:
-    """Prepare math / code parquet files if they don't exist yet."""
+    """Validate legacy capability-reactivation parquet inputs."""
     math_path = os.path.join(cfg.DATA_DIR, "reactivation_math.parquet")
     code_path = os.path.join(cfg.DATA_DIR, "reactivation_code.parquet")
     if os.path.exists(math_path) and os.path.exists(code_path):
         return
-    logger.info("Preparing capability reactivation data (math + code)...")
-    prep_script = os.path.join(cfg.PROJECT_DIR, "scripts", "data", "prepare_math_code_data.py")
-    subprocess.run([sys.executable, prep_script, "--all"], check=True)
-    assert os.path.exists(math_path), f"Missing {math_path}"
-    assert os.path.exists(code_path), f"Missing {code_path}"
-    logger.info("Capability data prepared.")
+    raise FileNotFoundError(
+        "Legacy capability-reactivation parquet inputs are missing. "
+        "For the final-paper Type-2 protocol, run "
+        "`python scripts/data/prepare_open_thoughts.py` followed by "
+        "`python scripts/experiments/type2_open_thoughts.py --help`. "
+        "The legacy capability stage requires both "
+        f"{math_path} and {code_path}."
+    )
 
 
 def load_math_sft_data() -> List[tinker.Datum]:

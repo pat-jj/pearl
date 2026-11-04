@@ -47,7 +47,7 @@ async def stage_organism(seed: int) -> dict:
 
     step = 0
     for epoch in range(ocfg["epochs"]):
-        random.shuffle(data)
+        random.Random(seed + epoch).shuffle(data)
         for bi in range(n_batches):
             batch = data[bi * ocfg["batch_size"] : (bi + 1) * ocfg["batch_size"]]
             if not batch:

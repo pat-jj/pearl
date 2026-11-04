@@ -19,8 +19,14 @@ import math
 import os
 import random
 import re
+import sys
 import time
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from code.framework.checkpoint_registry import checkpoint_pair
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("bcot_t1_lr_sweep")
@@ -36,8 +42,11 @@ def _try_swap_to_backup_key() -> bool:
     return False
 
 # ── ASSR cleanup model WITHOUT warmup (GPT-OSS-20B, Backdoor-CoT paper) ─────
-ASSR_STATE = "tinker://906536bf-f15a-5a27-90ed-d260ff668023:train:0/weights/pure_assr_bcot_final"
-ASSR_SAMPLER = "tinker://906536bf-f15a-5a27-90ed-d260ff668023:train:0/sampler_weights/pure_assr_bcot_final"
+ASSR_STATE, ASSR_SAMPLER = checkpoint_pair(
+    "bcot_pearl_no_sft",
+    placeholder_state="tinker://YOUR_TINKER_RUN_ID_09:train:0/weights/pure_assr_bcot_final",
+    placeholder_sampler="tinker://YOUR_TINKER_RUN_ID_09:train:0/sampler_weights/pure_assr_bcot_final",
+)
 CLEANUP_METHOD = "assr_no_sft"
 
 MODEL_NAME = "openai/gpt-oss-20b"
